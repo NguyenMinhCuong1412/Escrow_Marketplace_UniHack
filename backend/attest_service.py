@@ -1,0 +1,407 @@
+"""
+attest_service.py
+------------------
+Giai đoạn 1 (Cách B, đã chốt trong CLAUDE.md): AI pipeline chạy như một module
+trong backend, kích hoạt theo request khi buyer/seller đã nộp đủ bằng chứng —
+KHÔNG phải daemon chạy nền độc lập (đó là Giai đoạn 2, chỉ làm sau 16/11 nếu
+còn thời gian).
+
+Flow POST /verify-evidence:
+  1. Đọc giao dịch TỪ CHAIN (không tin dữ liệu client gửi): state, nonce,
+     itemValue, evidence hash, reputation hai bên.
+  2. Kiểm tra keccak256(evidenceUri) khớp hash đã neo on-chain → không ai đổi
+     ảnh sau khi đã submitEvidence().
+  3. Tải ảnh/video (ipfs:// tự đổi sang gateway), giới hạn dung lượng.
+  4. Chạy ai-pipeline/evidence_check.analyze_evidence (Vai 1 → 4).
+  5. Ký + gửi attest(tradeId, riskScore, flagged, reportHash) bằng ví agent.
+  6. Lưu report JSON (GET /report/{id}) để frontend hiển thị Explainable Evidence
+     Report và tự tính lại keccak256 đối chiếu reportHash on-chain.
+
+Chạy:  cd backend && uvicorn attest_service:app --port 8000
+Cấu hình: xem backend/.env.example (AGENT_PRIVATE_KEY KHÔNG BAO GIỜ commit).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sys
+import tempfile
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
+
+import requests
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import AliasChoices, BaseModel, Field
+
+BACKEND_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BACKEND_DIR.parent
+sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(ROOT_DIR / "ai-pipeline"))  # thư mục có dấu "-" nên không import dạng package được
+
+import evidence_check as ec  # noqa: E402
+import imagehash  # noqa: E402
+from chain import (  # noqa: E402
+    ChainError, EscrowClient, TradeState, evidence_hash_of, find_escrow_address, load_abi,
+)
+
+log = logging.getLogger("attest")
+
+
+# ---------------------------------------------------------------------------
+# Cấu hình
+# ---------------------------------------------------------------------------
+
+def _load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover
+        return
+    for p in (BACKEND_DIR / ".env", ROOT_DIR / ".env"):
+        if p.exists():
+            load_dotenv(p, override=False)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    return default if v is None else v.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass
+class Settings:
+    rpc_url: Optional[str] = None
+    agent_private_key: Optional[str] = None
+    escrow_address: Optional[str] = None
+    escrow_abi_path: Path = ROOT_DIR / "contracts" / "out" / "Escrow.sol" / "Escrow.json"
+    deployments_dir: Path = ROOT_DIR / "contracts" / "deployments"
+    data_dir: Path = BACKEND_DIR / "data"
+    ipfs_gateway: str = "https://gateway.pinata.cloud/ipfs/"
+    max_download_mb: int = 50
+    allowed_hosts: list[str] = field(default_factory=list)  # rỗng = cho phép mọi host
+    enforce_evidence_hash: bool = True
+    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    download_timeout: int = 30
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        _load_dotenv()
+        s = cls(
+            rpc_url=os.environ.get("RPC_URL"),
+            agent_private_key=os.environ.get("AGENT_PRIVATE_KEY"),
+            escrow_address=os.environ.get("ESCROW_ADDRESS") or None,
+            ipfs_gateway=os.environ.get("IPFS_GATEWAY", cls.ipfs_gateway),
+            max_download_mb=int(os.environ.get("MAX_DOWNLOAD_MB", cls.max_download_mb)),
+            allowed_hosts=[h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()],
+            enforce_evidence_hash=_env_bool("ENFORCE_EVIDENCE_HASH", True),
+            cors_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
+        )
+        if os.environ.get("ESCROW_ABI_PATH"):
+            s.escrow_abi_path = Path(os.environ["ESCROW_ABI_PATH"])
+        if os.environ.get("DATA_DIR"):
+            s.data_dir = Path(os.environ["DATA_DIR"])
+        if not s.escrow_abi_path.exists():
+            fallback = BACKEND_DIR / "abi" / "Escrow.json"
+            if fallback.exists():
+                s.escrow_abi_path = fallback
+        return s
+
+
+# ---------------------------------------------------------------------------
+# Kho pHash đã biết (Vai 1) — lưu file JSON để sống qua restart
+# ---------------------------------------------------------------------------
+
+class KnownHashStore:
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._items: list[dict] = []
+        if path.exists():
+            try:
+                self._items = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                log.warning("known_hashes.json hỏng, bắt đầu kho rỗng")
+
+    def hashes_excluding(self, trade_id: int) -> tuple[list[imagehash.ImageHash], list[dict]]:
+        """Bỏ qua hash của chính giao dịch này (verify lại không bị tính là tái sử dụng)."""
+        with self._lock:
+            rows = [r for r in self._items if r["trade_id"] != trade_id]
+        return [imagehash.hex_to_hash(r["phash"]) for r in rows], rows
+
+    def add(self, trade_id: int, role: str, phash: str) -> None:
+        with self._lock:
+            if any(r["trade_id"] == trade_id and r["role"] == role for r in self._items):
+                return
+            self._items.append({"trade_id": trade_id, "role": role, "phash": phash, "ts": int(time.time())})
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._items), encoding="utf-8")
+            tmp.replace(self.path)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+# ---------------------------------------------------------------------------
+# Tải bằng chứng
+# ---------------------------------------------------------------------------
+
+class DownloadError(Exception):
+    pass
+
+
+_CT_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/bmp": ".bmp",
+    "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm", "video/x-msvideo": ".avi",
+}
+
+
+def resolve_url(uri: str, settings: Settings) -> str:
+    """ipfs://CID[/path] → gateway; chỉ cho http(s); kiểm tra allowlist host nếu có."""
+    if uri.startswith("ipfs://"):
+        uri = settings.ipfs_gateway.rstrip("/") + "/" + uri[len("ipfs://"):].lstrip("/")
+    parsed = urlparse(uri)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise DownloadError(f"URL không hợp lệ (chỉ http/https/ipfs): {uri}")
+    host = (parsed.hostname or "").lower()
+    if settings.allowed_hosts and host not in settings.allowed_hosts:
+        raise DownloadError(f"Host không nằm trong ALLOWED_HOSTS: {host}")
+    return uri
+
+
+def download(uri: str, settings: Settings, workdir: str, name: str) -> str:
+    url = resolve_url(uri, settings)
+    limit = settings.max_download_mb * 1024 * 1024
+    try:
+        with requests.get(url, stream=True, timeout=settings.download_timeout) as resp:
+            resp.raise_for_status()
+            ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            ext = _CT_EXT.get(ctype) or os.path.splitext(urlparse(url).path)[1].lower() or ".jpg"
+            if int(resp.headers.get("Content-Length") or 0) > limit:
+                raise DownloadError(f"File quá lớn (> {settings.max_download_mb} MB): {uri}")
+            path = os.path.join(workdir, name + ext)
+            size = 0
+            with open(path, "wb") as f:
+                for chunk in resp.iter_content(64 * 1024):
+                    size += len(chunk)
+                    if size > limit:
+                        raise DownloadError(f"File quá lớn (> {settings.max_download_mb} MB): {uri}")
+                    f.write(chunk)
+    except DownloadError:
+        raise
+    except requests.RequestException as e:
+        raise DownloadError(f"Không tải được {uri}: {e}") from e
+    if size == 0:
+        raise DownloadError(f"File rỗng: {uri}")
+    return path
+
+
+# ---------------------------------------------------------------------------
+# API models
+# ---------------------------------------------------------------------------
+
+class VerifyRequest(BaseModel):
+    trade_id: int = Field(gt=0)
+    listing_image_url: str
+    seller_evidence_url: str = Field(validation_alias=AliasChoices("seller_evidence_url", "seller_evidence_image_url"))
+    buyer_evidence_url: str = Field(validation_alias=AliasChoices("buyer_evidence_url", "buyer_evidence_keyframe_url"))
+    dry_run: bool = False  # True: chạy pipeline, KHÔNG gửi attest() (xem trước / debug)
+    include_visual: bool = True
+
+
+class VerifyResponse(BaseModel):
+    trade_id: int
+    report: dict
+    report_hash: str
+    report_json: str           # chuỗi canonical đã băm — frontend keccak256 lại để đối chiếu
+    attested: bool
+    tx_hash: Optional[str] = None
+    match_visual_png_b64: Optional[str] = None
+    duration_ms: int
+
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
+
+def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClient] = None) -> FastAPI:
+    settings = settings or Settings.from_env()
+    app = FastAPI(title="Escrow AI Attest Service", version="1.0.0")
+    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
+
+    reports_dir = settings.data_dir / "reports"
+    store = KnownHashStore(settings.data_dir / "known_hashes.json")
+    state = {"client": client}
+    trade_locks: dict[int, threading.Lock] = {}
+    trade_locks_guard = threading.Lock()
+
+    def get_client() -> EscrowClient:
+        if state["client"] is not None:
+            return state["client"]
+        missing = [k for k, v in (("RPC_URL", settings.rpc_url), ("AGENT_PRIVATE_KEY", settings.agent_private_key)) if not v]
+        if missing:
+            raise HTTPException(503, f"Thiếu cấu hình: {', '.join(missing)} (xem backend/.env.example)")
+        if not settings.escrow_abi_path.exists():
+            raise HTTPException(503, f"Không thấy ABI tại {settings.escrow_abi_path} — chạy `forge build` trong contracts/")
+        abi = load_abi(settings.escrow_abi_path)
+        address = settings.escrow_address
+        if not address:
+            from web3 import Web3
+            cid = int(Web3(Web3.HTTPProvider(settings.rpc_url)).eth.chain_id)
+            address = find_escrow_address(settings.deployments_dir, cid)
+            if not address:
+                raise HTTPException(503, f"Thiếu ESCROW_ADDRESS và không có contracts/deployments/{cid}.json")
+        state["client"] = EscrowClient(settings.rpc_url, address, abi, settings.agent_private_key)
+        log.info("Kết nối Escrow %s, agent %s", address, state["client"].agent_address)
+        return state["client"]
+
+    def lock_for(trade_id: int) -> threading.Lock:
+        with trade_locks_guard:
+            return trade_locks.setdefault(trade_id, threading.Lock())
+
+    @app.get("/health")
+    def health():
+        info = {"ok": True, "embedding_backend": ec.embedding_backend(), "known_hashes": len(store)}
+        try:
+            ec.pytesseract.get_tesseract_version()
+            info["tesseract"] = True
+        except Exception:
+            info["tesseract"] = False
+        try:
+            c = get_client()
+            info.update({
+                "chain_id": c.chain_id(),
+                "escrow": c.escrow.address,
+                "agent": c.agent_address,
+                "agent_balance_wei": str(c.agent_balance()),
+                "agent_matches_contract": c.onchain_agent().lower() == c.agent_address.lower(),
+            })
+        except HTTPException as e:
+            info.update({"ok": False, "error": e.detail})
+        except Exception as e:
+            info.update({"ok": False, "error": f"RPC error: {e}"})
+        return info
+
+    @app.get("/trade/{trade_id}")
+    def get_trade(trade_id: int):
+        try:
+            t = get_client().get_trade(trade_id)
+        except ChainError as e:
+            raise HTTPException(502, str(e))
+        if not t.exists:
+            raise HTTPException(404, f"Trade {trade_id} không tồn tại")
+        c = get_client()
+        return {**t.to_json(), "nonce_short": ec.short_nonce(t.nonce),
+                "seller_reputation": c.reputation_of(t.seller), "buyer_reputation": c.reputation_of(t.buyer)}
+
+    @app.get("/report/{trade_id}")
+    def get_report(trade_id: int):
+        f = reports_dir / f"{trade_id}.json"
+        if not f.exists():
+            raise HTTPException(404, f"Chưa có report cho trade {trade_id}")
+        return json.loads(f.read_text(encoding="utf-8"))
+
+    @app.post("/verify-evidence", response_model=VerifyResponse)
+    def verify_evidence(req: VerifyRequest):
+        started = time.time()
+        c = get_client()
+        lock = lock_for(req.trade_id)
+        if not lock.acquire(blocking=False):
+            raise HTTPException(409, f"Trade {req.trade_id} đang được xử lý")
+        try:
+            # 1. Dữ liệu tin cậy lấy từ chain
+            try:
+                trade = c.get_trade(req.trade_id)
+            except ChainError as e:
+                raise HTTPException(502, str(e))
+            if not trade.exists:
+                raise HTTPException(404, f"Trade {req.trade_id} không tồn tại")
+            if trade.state != TradeState.AwaitingEvidence:
+                raise HTTPException(409, f"Trade ở trạng thái {trade.state.name}, cần AwaitingEvidence")
+            empty = "0x" + "00" * 32
+            if trade.seller_evidence_hash == empty or trade.buyer_evidence_hash == empty:
+                raise HTTPException(409, "Chưa đủ bằng chứng on-chain từ cả 2 bên")
+
+            # 2. Bằng chứng phải đúng cái đã neo on-chain
+            if settings.enforce_evidence_hash:
+                if evidence_hash_of(req.seller_evidence_url) != trade.seller_evidence_hash:
+                    raise HTTPException(422, "seller_evidence_url không khớp sellerEvidenceHash on-chain")
+                if evidence_hash_of(req.buyer_evidence_url) != trade.buyer_evidence_hash:
+                    raise HTTPException(422, "buyer_evidence_url không khớp buyerEvidenceHash on-chain")
+
+            seller_rep = c.reputation_of(trade.seller)
+            buyer_rep = c.reputation_of(trade.buyer)
+
+            # 3 + 4. Tải và phân tích
+            with tempfile.TemporaryDirectory(prefix=f"trade{req.trade_id}_") as wd:
+                try:
+                    listing = download(req.listing_image_url, settings, wd, "listing")
+                    seller = download(req.seller_evidence_url, settings, wd, "seller")
+                    buyer = download(req.buyer_evidence_url, settings, wd, "buyer")
+                except DownloadError as e:
+                    raise HTTPException(422, str(e))
+
+                known, _ = store.hashes_excluding(req.trade_id)
+                try:
+                    result = ec.analyze_evidence(
+                        req.trade_id, listing, seller, buyer, trade.nonce,
+                        seller_rep, buyer_rep, trade.item_value,
+                        known_hashes=known, with_visual=req.include_visual,
+                    )
+                except ValueError as e:  # ảnh/video hỏng
+                    raise HTTPException(422, f"Bằng chứng không đọc được: {e}")
+                except RuntimeError as e:  # thiếu Tesseract...
+                    log.exception("pipeline error")
+                    raise HTTPException(500, f"Lỗi pipeline: {e}")
+
+            report = result.report
+            report_hash = "0x" + result.report_hash.hex()
+            log.info("trade %s: risk=%s flagged=%s notes=%s", req.trade_id, report.risk_score, report.flagged, report.notes)
+
+            # 5. Gửi attest()
+            tx_hash = None
+            if not req.dry_run:
+                try:
+                    tx_hash = c.send_attest(req.trade_id, report.risk_score, report.flagged, result.report_hash)
+                except ChainError as e:
+                    log.error("attest failed for trade %s: %s", req.trade_id, e)
+                    raise HTTPException(502, str(e))
+                store.add(req.trade_id, "seller", result.seller_phash)
+                store.add(req.trade_id, "buyer", result.buyer_phash)
+
+            resp = VerifyResponse(
+                trade_id=req.trade_id,
+                report=report.to_dict(),
+                report_hash=report_hash,
+                report_json=report.canonical_json(),
+                attested=tx_hash is not None,
+                tx_hash=tx_hash,
+                match_visual_png_b64=result.match_visual_b64() if req.include_visual else None,
+                duration_ms=int((time.time() - started) * 1000),
+            )
+
+            # 6. Lưu report (chỉ khi đã attest — đây là bản neo on-chain)
+            if tx_hash:
+                reports_dir.mkdir(parents=True, exist_ok=True)
+                (reports_dir / f"{req.trade_id}.json").write_text(
+                    json.dumps({**resp.model_dump(), "evidence": {
+                        "listing_image_url": req.listing_image_url,
+                        "seller_evidence_url": req.seller_evidence_url,
+                        "buyer_evidence_url": req.buyer_evidence_url,
+                    }}, ensure_ascii=False), encoding="utf-8")
+            return resp
+        finally:
+            lock.release()
+
+    return app
+
+
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+app = create_app()

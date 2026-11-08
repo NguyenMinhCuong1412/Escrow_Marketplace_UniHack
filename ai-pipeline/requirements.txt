@@ -1,0 +1,8 @@
+opencv-python-headless>=4.9
+numpy>=1.26
+Pillow>=10.0
+ImageHash>=4.3
+pytesseract>=0.3.10
+# Tùy chọn, bật khi có mạng để dùng embedding thật thay vì fallback histogram:
+# torch>=2.2
+# open_clip_torch>=2.24

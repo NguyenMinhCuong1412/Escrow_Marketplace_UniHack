@@ -1,0 +1,10 @@
+.env
+*.env.local
+.venv/
+__pycache__/
+.pytest_cache/
+backend/data/
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+contracts/deployments/31337.json

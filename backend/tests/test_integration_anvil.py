@@ -1,0 +1,327 @@
+"""
+Integration test: contract thật trên anvil ↔ backend FastAPI ↔ AI pipeline thật.
+
+Luồng mỗi kịch bản: deploy → createTrade → deposit x2 → sinh ảnh có nonce ĐỌC TỪ
+CHAIN → submitEvidence(keccak(url)) x2 → POST /verify-evidence (backend tự ký
+attest()) → kiểm tra state/reportHash on-chain → resolveClean / dispute.
+
+Yêu cầu: Foundry (anvil) + `forge build` đã chạy trong contracts/ + Tesseract.
+"""
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from web3 import Web3
+
+import attest_service as svc
+import evidence_check as ec
+import synth
+from chain import TradeState, evidence_hash_of
+
+ROOT = svc.ROOT_DIR
+OUT = ROOT / "contracts" / "out"
+
+# Key mặc định CÔNG KHAI của anvil — chỉ dùng cho local test.
+DEPLOYER = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+AGENT = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+SELLER = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
+BUYER = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6"
+STRANGER = "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a"
+
+WINDOW = 60
+ITEM_VALUE = Web3.to_wei(2, "ether")
+
+
+def _artifact(name):
+    f = OUT / f"{name}.sol" / f"{name}.json"
+    if not f.exists():
+        pytest.skip(f"Thiếu {f} — chạy `forge build` trong contracts/")
+    d = json.loads(f.read_text(encoding="utf-8"))
+    return d["abi"], d["bytecode"]["object"]
+
+
+def _ocr_ok():
+    try:
+        ec.pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(ec.pytesseract is None or not _ocr_ok(), reason="Tesseract chưa cài")
+
+
+class Chain:
+    def __init__(self, url):
+        self.w3 = Web3(Web3.HTTPProvider(url))
+        self.acct = {k: self.w3.eth.account.from_key(v) for k, v in
+                     dict(deployer=DEPLOYER, agent=AGENT, seller=SELLER, buyer=BUYER, stranger=STRANGER).items()}
+        tok_abi, tok_bin = _artifact("CollectibleToken")
+        esc_abi, esc_bin = _artifact("Escrow")
+        self.token = self._deploy(tok_abi, tok_bin)
+        self.escrow = self._deploy(esc_abi, esc_bin, self.token.address, self.acct["agent"].address,
+                                   WINDOW, WINDOW, WINDOW)
+        self.tx("deployer", self.token.functions.setEscrow(self.escrow.address))
+        self.esc_abi = esc_abi
+
+    def _deploy(self, abi, bytecode, *args):
+        c = self.w3.eth.contract(abi=abi, bytecode=bytecode)
+        r = self.tx("deployer", c.constructor(*args))
+        return self.w3.eth.contract(address=r["contractAddress"], abi=abi)
+
+    def tx(self, who, fn, value=0):
+        a = self.acct[who]
+        t = fn.build_transaction({"from": a.address, "value": value,
+                                  "nonce": self.w3.eth.get_transaction_count(a.address, "pending")})
+        h = self.w3.eth.send_raw_transaction(a.sign_transaction(t).raw_transaction)
+        r = self.w3.eth.wait_for_transaction_receipt(h)
+        assert r["status"] == 1, f"tx reverted: {fn.fn_name}"
+        return r
+
+    def warp(self, secs):
+        self.w3.provider.make_request("evm_increaseTime", [secs])
+        self.w3.provider.make_request("evm_mine", [])
+
+    def trade(self, tid):
+        return self.escrow.functions.getTrade(tid).call()
+
+    def balance(self, who):
+        return self.w3.eth.get_balance(self.acct[who].address)
+
+    def funded_trade(self):
+        self.tx("seller", self.escrow.functions.createTrade(self.acct["buyer"].address, ITEM_VALUE))
+        tid = self.escrow.functions.nextTradeId().call() - 1
+        dep = self.trade(tid)[3]
+        self.tx("seller", self.escrow.functions.deposit(tid), dep)
+        self.tx("buyer", self.escrow.functions.deposit(tid), dep)
+        return tid
+
+
+@pytest.fixture(scope="module")
+def chain(anvil):
+    return Chain(anvil)
+
+
+@pytest.fixture(scope="module")
+def client(chain, anvil, tmp_path_factory):
+    settings = svc.Settings(
+        rpc_url=anvil, agent_private_key=AGENT, escrow_address=chain.escrow.address,
+        escrow_abi_path=OUT / "Escrow.sol" / "Escrow.json",
+        data_dir=tmp_path_factory.mktemp("backend_data"),
+    )
+    return TestClient(svc.create_app(settings))
+
+
+def _publish(file_server, name, img=None, frames=None):
+    root, base = file_server
+    if frames is not None:
+        path = synth.write_video(frames, str(root / f"{name}.mp4"))
+    else:
+        path = synth.write_image(img, str(root / f"{name}.jpg"))
+    return f"{base}/{path.replace(chr(92), '/').split('/')[-1]}"
+
+
+def _photo(item, seed, short, nonce_hex, **kw):
+    """Ảnh có nonce mà OCR chắc chắn đọc được. Nonce on-chain là ngẫu nhiên và OCR
+    trên font tổng hợp đạt ~99% (đo ở ai-pipeline), nên đổi góc chụp nếu lỡ trượt —
+    test này kiểm tra đường ống backend ↔ chain, độ chính xác OCR có unit test riêng."""
+    for k in range(6):
+        img = synth.photograph(item, seed + 1000 * k, short, **kw)
+        if short is None or ec.check_nonce(img, nonce_hex).found:
+            return img
+    raise AssertionError("OCR không đọc được nonce sau 6 lần thử")
+
+
+def _evidence(chain, file_server, tid, *, seller_nonce=True, buyer_nonce=True, item_seed=11,
+              buyer_item_seed=None, buyer_video=False, seller_img=None):
+    """Sinh ảnh với nonce thật của trade, publish qua HTTP, neo keccak(url) on-chain."""
+    nonce = Web3.to_hex(chain.trade(tid)[6])
+    short = ec.short_nonce(nonce)
+    item = synth.make_item(item_seed)
+    buyer_item = synth.make_item(buyer_item_seed) if buyer_item_seed is not None else item
+    listing = _publish(file_server, f"t{tid}_listing", item)
+    seller = _publish(file_server, f"t{tid}_seller",
+                      seller_img if seller_img is not None else _photo(item, tid, short if seller_nonce else None, nonce))
+    if buyer_video:
+        buyer = _publish(file_server, f"t{tid}_buyer", frames=synth.unbox_frames(buyer_item, short if buyer_nonce else None))
+    else:
+        buyer = _publish(file_server, f"t{tid}_buyer",
+                         _photo(buyer_item, tid + 50, short if buyer_nonce else None, nonce, brightness=0.9))
+    chain.tx("seller", chain.escrow.functions.submitEvidence(tid, evidence_hash_of(seller)))
+    chain.tx("buyer", chain.escrow.functions.submitEvidence(tid, evidence_hash_of(buyer)))
+    return {"trade_id": tid, "listing_image_url": listing, "seller_evidence_url": seller, "buyer_evidence_url": buyer}
+
+
+# ---------------------------------------------------------------------------
+
+def test_health(client, chain):
+    body = client.get("/health").json()
+    assert body["ok"] is True, body
+    assert body["chain_id"] == 31337
+    assert body["agent"] == chain.acct["agent"].address
+    assert body["agent_matches_contract"] is True
+    assert body["tesseract"] is True
+
+
+def test_clean_trade_end_to_end(client, chain, file_server):
+    s0, b0 = chain.balance("seller"), chain.balance("buyer")
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid)
+
+    r = client.post("/verify-evidence", json=req)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["attested"] and body["tx_hash"].startswith("0x")
+    assert body["report"]["flagged"] is False, body["report"]["notes"]
+    assert body["report"]["nonce_ok_seller"] and body["report"]["nonce_ok_buyer"]
+    assert body["match_visual_png_b64"]
+
+    t = chain.trade(tid)
+    assert t[15] == TradeState.Attested
+    assert t[10] == body["report"]["risk_score"]
+    assert t[11] is False
+    # reportHash on-chain == keccak256(report_json) — ai cũng kiểm chứng lại được
+    assert Web3.to_hex(t[9]) == body["report_hash"] == Web3.to_hex(Web3.keccak(text=body["report_json"]))
+
+    # Report được lưu và trả lại qua GET /report
+    saved = client.get(f"/report/{tid}").json()
+    assert saved["report_hash"] == body["report_hash"]
+    assert saved["evidence"]["seller_evidence_url"] == req["seller_evidence_url"]
+
+    # /trade endpoint
+    info = client.get(f"/trade/{tid}").json()
+    assert info["state"] == "Attested" and info["nonce_short"] == ec.short_nonce(Web3.to_hex(t[6]))
+
+    # Hết dispute window → giải ngân sạch, hoàn đủ cọc
+    chain.warp(WINDOW + 1)
+    chain.tx("stranger", chain.escrow.functions.resolveClean(tid))
+    assert chain.trade(tid)[15] == TradeState.Resolved
+    assert chain.token.functions.totalSupply().call() == 0
+    gas_tolerance = Web3.to_wei(0.01, "ether")
+    assert s0 - chain.balance("seller") < gas_tolerance
+    assert b0 - chain.balance("buyer") < gas_tolerance
+
+
+def test_verify_again_after_attest_conflict(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid)
+    assert client.post("/verify-evidence", json=req).status_code == 200
+    r = client.post("/verify-evidence", json=req)
+    assert r.status_code == 409 and "Attested" in r.json()["detail"]
+
+
+def test_missing_buyer_nonce_flags_and_dispute_slashes(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, buyer_nonce=False)
+
+    body = client.post("/verify-evidence", json=req).json()
+    assert body["report"]["flagged"] is True
+    assert body["report"]["nonce_ok_buyer"] is False
+    assert chain.trade(tid)[11] is True
+
+    # flagged → không auto-resolve, ai cũng đẩy sang dispute được
+    chain.warp(WINDOW + 1)
+    chain.tx("stranger", chain.escrow.functions.fileComplaint(tid))
+    assert chain.trade(tid)[15] == TradeState.Disputed
+
+    dep = chain.trade(tid)[3]
+    penalty = dep * 500 // 10000
+    s0, b0 = chain.balance("seller"), chain.balance("buyer")
+    chain.tx("deployer", chain.escrow.functions.resolveDispute(tid, chain.acct["buyer"].address))
+    assert chain.balance("seller") - s0 == dep + penalty
+    assert chain.balance("buyer") - b0 == dep - penalty
+
+
+def test_wrong_item_shipped_is_high_risk(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, item_seed=21, buyer_item_seed=77)
+    body = client.post("/verify-evidence", json=req).json()
+    assert body["report"]["details"]["inliers_listing_buyer"] < ec.MIN_GOOD_INLIERS
+    assert body["report"]["risk_score"] >= 50
+
+
+def test_buyer_video_evidence(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, buyer_video=True, item_seed=31)
+    body = client.post("/verify-evidence", json=req).json()
+    assert body["report"]["details"]["buyer_evidence_kind"] == "video"
+    assert body["report"]["nonce_ok_buyer"] is True
+    assert body["report"]["flagged"] is False, body["report"]["notes"]
+
+
+def test_reused_photo_across_trades_flagged(client, chain, file_server):
+    # Trade A sạch → pHash ảnh seller vào kho
+    tid_a = chain.funded_trade()
+    nonce_a = ec.short_nonce(Web3.to_hex(chain.trade(tid_a)[6]))
+    old_photo = _photo(synth.make_item(41), 3, nonce_a, Web3.to_hex(chain.trade(tid_a)[6]))
+    req_a = _evidence(chain, file_server, tid_a, item_seed=41, seller_img=old_photo)
+    assert client.post("/verify-evidence", json=req_a).json()["report"]["flagged"] is False
+
+    # Trade B: seller dùng lại đúng ảnh cũ (nonce cũ) → tái sử dụng + sai nonce
+    tid_b = chain.funded_trade()
+    req_b = _evidence(chain, file_server, tid_b, item_seed=41, seller_img=old_photo)
+    rep = client.post("/verify-evidence", json=req_b).json()["report"]
+    assert rep["phash_reused"] is True
+    assert rep["nonce_ok_seller"] is False
+    assert rep["flagged"] is True
+
+
+def test_evidence_url_must_match_onchain_hash(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid)
+    tampered = dict(req, seller_evidence_url=req["listing_image_url"])  # đổi ảnh sau khi neo
+    r = client.post("/verify-evidence", json=tampered)
+    assert r.status_code == 422 and "sellerEvidenceHash" in r.json()["detail"]
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
+
+
+def test_dry_run_does_not_attest(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid)
+    body = client.post("/verify-evidence", json=dict(req, dry_run=True, include_visual=False)).json()
+    assert body["attested"] is False and body["tx_hash"] is None and body["match_visual_png_b64"] is None
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
+    assert client.get(f"/report/{tid}").status_code == 404
+
+
+def test_not_funded_conflict(client, chain):
+    chain.tx("seller", chain.escrow.functions.createTrade(chain.acct["buyer"].address, ITEM_VALUE))
+    tid = chain.escrow.functions.nextTradeId().call() - 1
+    r = client.post("/verify-evidence", json={"trade_id": tid, "listing_image_url": "http://x/a",
+                                              "seller_evidence_url": "http://x/b", "buyer_evidence_url": "http://x/c"})
+    assert r.status_code == 409 and "Created" in r.json()["detail"]
+
+
+def test_missing_evidence_conflict(client, chain):
+    tid = chain.funded_trade()
+    r = client.post("/verify-evidence", json={"trade_id": tid, "listing_image_url": "http://x/a",
+                                              "seller_evidence_url": "http://x/b", "buyer_evidence_url": "http://x/c"})
+    assert r.status_code == 409 and "bằng chứng" in r.json()["detail"]
+
+
+def test_unknown_trade_404(client):
+    r = client.post("/verify-evidence", json={"trade_id": 99999, "listing_image_url": "http://x/a",
+                                              "seller_evidence_url": "http://x/b", "buyer_evidence_url": "http://x/c"})
+    assert r.status_code == 404
+
+
+def test_broken_image_422(client, chain, file_server):
+    root, base = file_server
+    tid = chain.funded_trade()
+    (root / f"t{tid}_broken.jpg").write_bytes(b"definitely not a jpeg")
+    req = _evidence(chain, file_server, tid)
+    # listing không neo on-chain → thay listing bằng file hỏng
+    r = client.post("/verify-evidence", json=dict(req, listing_image_url=f"{base}/t{tid}_broken.jpg"))
+    assert r.status_code == 422
+
+
+def test_wrong_agent_key_gives_502(chain, anvil, file_server, tmp_path):
+    settings = svc.Settings(rpc_url=anvil, agent_private_key=STRANGER, escrow_address=chain.escrow.address,
+                            escrow_abi_path=OUT / "Escrow.sol" / "Escrow.json", data_dir=tmp_path)
+    c = TestClient(svc.create_app(settings))
+    assert c.get("/health").json()["agent_matches_contract"] is False
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid)
+    r = c.post("/verify-evidence", json=dict(req, include_visual=False))
+    assert r.status_code == 502 and "not agent" in r.json()["detail"]
