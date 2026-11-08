@@ -18,6 +18,8 @@ COPY backend/abi backend/abi
 COPY contracts/deployments contracts/deployments
 
 ENV DATA_DIR=/data PYTHONUNBUFFERED=1
+ENV ALLOW_LOCAL_HOSTS=false
+ENV CORS_ORIGINS=""
 VOLUME /data
 WORKDIR /app/backend
 EXPOSE 8000

@@ -23,9 +23,11 @@ Cấu hình: xem backend/.env.example (AGENT_PRIVATE_KEY KHÔNG BAO GIỜ commit
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -33,12 +35,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, Field
+from web3 import Web3
 
 BACKEND_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BACKEND_DIR.parent
@@ -83,14 +86,18 @@ class Settings:
     data_dir: Path = BACKEND_DIR / "data"
     ipfs_gateway: str = "https://gateway.pinata.cloud/ipfs/"
     max_download_mb: int = 50
-    allowed_hosts: list[str] = field(default_factory=list)  # rỗng = cho phép mọi host
+    allowed_hosts: list[str] = field(default_factory=list)  # rỗng = chỉ cho phép host từ ipfs_gateway
+    allow_local_hosts: bool = False  # True: cho phép IP nội bộ/loopback (chỉ dùng cho local dev/test)
+    attest_api_key: Optional[str] = None
     enforce_evidence_hash: bool = True
-    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(default_factory=list)  # rỗng = không cho phép origin nào
     download_timeout: int = 30
 
     @classmethod
     def from_env(cls) -> "Settings":
         _load_dotenv()
+        cors_val = os.environ.get("CORS_ORIGINS", "")
+        cors_origins = [o.strip() for o in cors_val.split(",") if o.strip()]
         s = cls(
             rpc_url=os.environ.get("RPC_URL"),
             agent_private_key=os.environ.get("AGENT_PRIVATE_KEY"),
@@ -98,8 +105,10 @@ class Settings:
             ipfs_gateway=os.environ.get("IPFS_GATEWAY", cls.ipfs_gateway),
             max_download_mb=int(os.environ.get("MAX_DOWNLOAD_MB", cls.max_download_mb)),
             allowed_hosts=[h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()],
+            allow_local_hosts=_env_bool("ALLOW_LOCAL_HOSTS", False),
+            attest_api_key=os.environ.get("ATTEST_API_KEY") or None,
             enforce_evidence_hash=_env_bool("ENFORCE_EVIDENCE_HASH", True),
-            cors_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
+            cors_origins=cors_origins,
         )
         if os.environ.get("ESCROW_ABI_PATH"):
             s.escrow_abi_path = Path(os.environ["ESCROW_ABI_PATH"])
@@ -148,7 +157,7 @@ class KnownHashStore:
 
 
 # ---------------------------------------------------------------------------
-# Tải bằng chứng
+# Tải bằng chứng & SSRF Protection
 # ---------------------------------------------------------------------------
 
 class DownloadError(Exception):
@@ -160,42 +169,135 @@ _CT_EXT = {
     "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm", "video/x-msvideo": ".avi",
 }
 
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "video/mp4",
+    "application/octet-stream",
+}
+
+_RESTRICTED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def check_ip_ssrf(ip_str: str, allow_local_hosts: bool = False) -> None:
+    """Kiểm tra IP có thuộc dải private/loopback/link-local/metadata không."""
+    if allow_local_hosts:
+        return
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        raise DownloadError(f"IP không hợp lệ: {ip_str}")
+
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
+        raise DownloadError(f"IP {ip_str} thuộc dải bị chặn (SSRF protection)")
+
+    for net in _RESTRICTED_NETWORKS:
+        if ip in net:
+            raise DownloadError(f"IP {ip_str} thuộc dải bị chặn (SSRF protection)")
+
+
+def validate_host_dns_and_ip(host: str, allow_local_hosts: bool = False) -> None:
+    """Phân giải DNS của host và kiểm tra các địa chỉ IP tương ứng."""
+    if allow_local_hosts:
+        return
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as e:
+        raise DownloadError(f"Không thể resolve host {host}: {e}")
+    if not infos:
+        raise DownloadError(f"Không tìm thấy địa chỉ IP cho host {host}")
+    for info in infos:
+        ip_str = info[4][0]
+        check_ip_ssrf(ip_str, allow_local_hosts)
+
 
 def resolve_url(uri: str, settings: Settings) -> str:
-    """ipfs://CID[/path] → gateway; chỉ cho http(s); kiểm tra allowlist host nếu có."""
+    """ipfs://CID[/path] → gateway; chỉ cho http(s); kiểm tra allowlist host."""
     if uri.startswith("ipfs://"):
         uri = settings.ipfs_gateway.rstrip("/") + "/" + uri[len("ipfs://"):].lstrip("/")
     parsed = urlparse(uri)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise DownloadError(f"URL không hợp lệ (chỉ http/https/ipfs): {uri}")
     host = (parsed.hostname or "").lower()
-    if settings.allowed_hosts and host not in settings.allowed_hosts:
+
+    effective_allowed = [h.lower() for h in settings.allowed_hosts] if settings.allowed_hosts else []
+    if not effective_allowed:
+        gw_host = (urlparse(settings.ipfs_gateway).hostname or "").lower()
+        if gw_host:
+            effective_allowed = [gw_host]
+
+    if host not in effective_allowed:
         raise DownloadError(f"Host không nằm trong ALLOWED_HOSTS: {host}")
     return uri
 
 
 def download(uri: str, settings: Settings, workdir: str, name: str) -> str:
     url = resolve_url(uri, settings)
+    parsed = urlparse(url)
+    validate_host_dns_and_ip(parsed.hostname or "", settings.allow_local_hosts)
+
     limit = settings.max_download_mb * 1024 * 1024
+    session = requests.Session()
+    current_url = url
+    resp = None
+    redirect_count = 0
+    MAX_REDIRECTS = 3
+
     try:
-        with requests.get(url, stream=True, timeout=settings.download_timeout) as resp:
+        while True:
+            resp = session.get(current_url, stream=True, timeout=settings.download_timeout, allow_redirects=False)
+            if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+                redirect_count += 1
+                if redirect_count > MAX_REDIRECTS:
+                    raise DownloadError(f"Vượt quá số lần redirect tối đa ({MAX_REDIRECTS})")
+                location = resp.headers.get("Location")
+                if not location:
+                    raise DownloadError("Redirect response thiếu Location header")
+                next_url = urljoin(current_url, location)
+                # Validate redirect target host and IP
+                resolve_url(next_url, settings)
+                next_parsed = urlparse(next_url)
+                validate_host_dns_and_ip(next_parsed.hostname or "", settings.allow_local_hosts)
+                current_url = next_url
+                continue
             resp.raise_for_status()
-            ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
-            ext = _CT_EXT.get(ctype) or os.path.splitext(urlparse(url).path)[1].lower() or ".jpg"
-            if int(resp.headers.get("Content-Length") or 0) > limit:
-                raise DownloadError(f"File quá lớn (> {settings.max_download_mb} MB): {uri}")
-            path = os.path.join(workdir, name + ext)
-            size = 0
-            with open(path, "wb") as f:
-                for chunk in resp.iter_content(64 * 1024):
-                    size += len(chunk)
-                    if size > limit:
-                        raise DownloadError(f"File quá lớn (> {settings.max_download_mb} MB): {uri}")
-                    f.write(chunk)
+            break
+
+        ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if ctype not in ALLOWED_CONTENT_TYPES:
+            raise DownloadError(f"Content-Type không được phép: {ctype}")
+
+        ext = _CT_EXT.get(ctype) or os.path.splitext(urlparse(current_url).path)[1].lower() or ".jpg"
+        if int(resp.headers.get("Content-Length") or 0) > limit:
+            raise DownloadError(f"File quá lớn (> {settings.max_download_mb} MB): {uri}")
+        path = os.path.join(workdir, name + ext)
+        size = 0
+        with open(path, "wb") as f:
+            for chunk in resp.iter_content(64 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise DownloadError(f"File quá lớn (> {settings.max_download_mb} MB): {uri}")
+                f.write(chunk)
     except DownloadError:
         raise
     except requests.RequestException as e:
         raise DownloadError(f"Không tải được {uri}: {e}") from e
+    finally:
+        if resp is not None:
+            resp.close()
+        session.close()
+
     if size == 0:
         raise DownloadError(f"File rỗng: {uri}")
     return path
@@ -232,13 +334,25 @@ class VerifyResponse(BaseModel):
 def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClient] = None) -> FastAPI:
     settings = settings or Settings.from_env()
     app = FastAPI(title="Escrow AI Attest Service", version="1.0.0")
-    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     reports_dir = settings.data_dir / "reports"
     store = KnownHashStore(settings.data_dir / "known_hashes.json")
     state = {"client": client}
     trade_locks: dict[int, threading.Lock] = {}
     trade_locks_guard = threading.Lock()
+
+    rate_limit_lock = threading.Lock()
+    rate_limit_records: dict[str, list[float]] = {}
+    RATE_LIMIT_WINDOW = 60.0
+    RATE_LIMIT_MAX_REQUESTS = 10
 
     def get_client() -> EscrowClient:
         if state["client"] is not None:
@@ -307,14 +421,43 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         return json.loads(f.read_text(encoding="utf-8"))
 
     @app.post("/verify-evidence", response_model=VerifyResponse)
-    def verify_evidence(req: VerifyRequest):
+    def verify_evidence(
+        req: VerifyRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    ):
         started = time.time()
+
+        # 1. API Key Auth
+        if settings.attest_api_key:
+            if not x_api_key or x_api_key != settings.attest_api_key:
+                raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        else:
+            log.warning("ATTEST_API_KEY không được thiết lập - bỏ qua xác thực (chế độ dev)")
+
+        # 2. In-memory Rate Limiter (10 req/min/IP)
+        client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+        now = time.time()
+        with rate_limit_lock:
+            timestamps = rate_limit_records.get(client_ip, [])
+            timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+            if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+                rate_limit_records[client_ip] = timestamps
+                raise HTTPException(status_code=429, detail="Too Many Requests: Rate limit exceeded (10 req/min)")
+            timestamps.append(now)
+            rate_limit_records[client_ip] = timestamps
+
         c = get_client()
+
+        # 3. Validate listing_image_url scheme (must be ipfs://)
+        if not req.listing_image_url.startswith("ipfs://"):
+            raise HTTPException(status_code=422, detail="listing_image_url must be an ipfs:// URI")
+
         lock = lock_for(req.trade_id)
         if not lock.acquire(blocking=False):
             raise HTTPException(409, f"Trade {req.trade_id} đang được xử lý")
         try:
-            # 1. Dữ liệu tin cậy lấy từ chain
+            # 4. Dữ liệu tin cậy lấy từ chain
             try:
                 trade = c.get_trade(req.trade_id)
             except ChainError as e:
@@ -327,7 +470,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             if trade.seller_evidence_hash == empty or trade.buyer_evidence_hash == empty:
                 raise HTTPException(409, "Chưa đủ bằng chứng on-chain từ cả 2 bên")
 
-            # 2. Bằng chứng phải đúng cái đã neo on-chain
+            # 5. Bằng chứng phải đúng cái đã neo on-chain
             if settings.enforce_evidence_hash:
                 if evidence_hash_of(req.seller_evidence_url) != trade.seller_evidence_hash:
                     raise HTTPException(422, "seller_evidence_url không khớp sellerEvidenceHash on-chain")
@@ -337,7 +480,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             seller_rep = c.reputation_of(trade.seller)
             buyer_rep = c.reputation_of(trade.buyer)
 
-            # 3 + 4. Tải và phân tích
+            # 6. Tải và phân tích
             with tempfile.TemporaryDirectory(prefix=f"trade{req.trade_id}_") as wd:
                 try:
                     listing = download(req.listing_image_url, settings, wd, "listing")
@@ -345,6 +488,11 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
                     buyer = download(req.buyer_evidence_url, settings, wd, "buyer")
                 except DownloadError as e:
                     raise HTTPException(422, str(e))
+
+                # Compute keccak256 hash of listing image
+                with open(listing, "rb") as lf:
+                    listing_bytes = lf.read()
+                listing_hash = Web3.to_hex(Web3.keccak(listing_bytes)).lower()
 
                 known, _ = store.hashes_excluding(req.trade_id)
                 try:
@@ -363,7 +511,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             report_hash = "0x" + result.report_hash.hex()
             log.info("trade %s: risk=%s flagged=%s notes=%s", req.trade_id, report.risk_score, report.flagged, report.notes)
 
-            # 5. Gửi attest()
+            # 7. Gửi attest()
             tx_hash = None
             if not req.dry_run:
                 try:
@@ -374,9 +522,12 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
                 store.add(req.trade_id, "seller", result.seller_phash)
                 store.add(req.trade_id, "buyer", result.buyer_phash)
 
+            report_dict = report.to_dict()
+            report_dict["listing_hash"] = listing_hash
+
             resp = VerifyResponse(
                 trade_id=req.trade_id,
-                report=report.to_dict(),
+                report=report_dict,
                 report_hash=report_hash,
                 report_json=report.canonical_json(),
                 attested=tx_hash is not None,
@@ -385,11 +536,11 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
                 duration_ms=int((time.time() - started) * 1000),
             )
 
-            # 6. Lưu report (chỉ khi đã attest — đây là bản neo on-chain)
+            # 8. Lưu report (chỉ khi đã attest — đây là bản neo on-chain)
             if tx_hash:
                 reports_dir.mkdir(parents=True, exist_ok=True)
                 (reports_dir / f"{req.trade_id}.json").write_text(
-                    json.dumps({**resp.model_dump(), "evidence": {
+                    json.dumps({**resp.model_dump(), "listing_hash": listing_hash, "evidence": {
                         "listing_image_url": req.listing_image_url,
                         "seller_evidence_url": req.seller_evidence_url,
                         "buyer_evidence_url": req.buyer_evidence_url,
