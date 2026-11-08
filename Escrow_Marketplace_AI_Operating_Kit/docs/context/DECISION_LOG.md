@@ -17,9 +17,21 @@ Ghi các quyết định đã được Owner phê duyệt. Không xóa quyết �
 | DEC-010 | 2026-11-04 | `resolveDispute(id, address(0))` = không ai sai (AI flag nhầm) → hoàn đủ cọc cả hai bên | CONFIRMED | Cần escape hatch cho false positive của AI. Công bằng | Quốc | Foundry tests |
 | DEC-011 | 2026-11-04 | Frontend chỉ viết spec (Phase 2) — AI khác hoặc team member code theo `docs/FRONTEND_SPEC.md`. Đề xuất: Next.js + Tailwind + wagmi/viem | CONFIRMED | Tiết kiệm token Claude Code cho phần nặng (contract + AI + backend) | Quốc | `docs/FRONTEND_SPEC.md` |
 | DEC-012 | 2026-11-04 | Feature freeze 16/11/2026. Sau đó chỉ slide + video + kiểm tra link | CONFIRMED | Đảm bảo đủ thời gian cho presentation (10% điểm) và kiểm tra nộp bài | Quốc | Timeline |
+| DEC-013 | 2026-11-08 | Listing image chỉ validate `ipfs://` + ghi `listing_hash` vào report; chưa neo on-chain | PROPOSED | Người gọi vẫn có thể đưa CID tuỳ ý; roadmap thêm `listingHash` vào `createTrade()` on-chain | Project Owner | Task 3A-03 |
+| DEC-014 | 2026-11-08 | Vai trò owner trong `resolveDispute`: (1) Minimal arbiter (ví team), (2) Multisig Safe, (3) AI resolve + on-chain appeal | PROPOSED | Cần quyết định mức độ phân quyền giải quyết khiếu nại cho hackathon vs roadmap | Project Owner | Task 3A-06 |
 
-## Template thêm quyết định
+---
 
-| ID | Date | Decision | Status | Rationale | Owner | Evidence / Related task |
-|---|---|---|---|---|---|---|
-| DEC-XXX | YYYY-MM-DD | ... | PROPOSED / CONFIRMED / SUPERSEDED | ... | ... | ... |
+### DL-013: Listing image chưa neo on-chain (PROPOSED)
+- Hiện tại: `listing_image_url` chỉ validate `ipfs://` + ghi hash vào report.
+- Hạn chế: người gọi vẫn có thể đưa CID ảnh listing tuỳ ý — chưa có ràng buộc on-chain.
+- Roadmap: thêm `listingHash` vào `createTrade()` trong smart contract.
+- Trạng thái: PROPOSED — chờ team quyết định.
+
+### DL-014: Vai trò owner trong resolveDispute (PROPOSED)
+- Hiện tại: `resolveDispute()` dùng modifier `onlyOwner`.
+- Phương án:
+  (1) Owner = ví riêng team, nói rõ là "minimal arbiter" → đơn giản, đủ cho hackathon
+  (2) Multisig (vd Gnosis Safe) → phân quyền tốt hơn, phức tạp hơn
+  (3) AI agent resolve + cơ chế kháng cáo on-chain → roadmap dài hạn
+- Trạng thái: PROPOSED — chờ team quyết định.

@@ -12,7 +12,7 @@ Các mục đã được trả lời ghi rõ câu trả lời và nguồn. Các 
 | Q-006 | Token, decimals, fee và chain nào dùng trong demo? | Contract/API/UI | **AVAX trên Fuji testnet (chain ID 43113).** CollectibleToken là utility/receipt (mint/burn 1:1), không phải payment token | Quốc | ✅ ANSWERED |
 | Q-007 | AI Pipeline làm nhiệm vụ nào, có ảnh hưởng dispute? | Safety và boundary | **AI verify evidence tự động, gọi `attest()`. Không chuyển tiền trực tiếp** — contract enforce dựa trên attestation result | Quốc | ✅ ANSWERED |
 | Q-008 | Hạn nộp và rubric cuộc thi? | Ưu tiên MVP | **Xem `COMPETITION_CONTEXT.md`.** Deadline 21/11/2026 23:59 VN. Rubric: Tech 25%, Avalanche 25%, Creativity 15%, Impact 15%, Presentation 10%, UI/UX 10% | Quốc | ✅ ANSWERED |
-| Q-009 | Git repository có sạch, có secret bị track? | Worktree an toàn | Cần chạy preflight audit — chưa kiểm tra `.env`, private key hoặc secret trong git history | Quốc | ⬜ OPEN |
+| Q-009 | Git repository có sạch, có secret bị track? | Worktree an toàn | **ĐÃ HOÀN TẤT PREFLIGHT AUDIT.** Git history chỉ chứa Anvil test key mặc định (`0xac09...`), không có private key thật hay credentials sản xuất. Working tree sạch, không track file `.env` hoặc credential thật. | Lead / Quốc | ✅ RESOLVED |
 | Q-010 | Hệ thống deployment/CI/demo environment? | Release plan | Chưa có CI pipeline. Deploy script (`Deploy.s.sol`) sẵn nhưng chưa deploy lên Fuji. Dockerfile cho backend có sẵn | Quốc | ⬜ OPEN |
 | Q-011 | Tên chính thức của dự án? | Branding, repo name, slide | Chưa chốt — cần Owner quyết định | Quốc | ⬜ OPEN |
 | Q-012 | Category đồ sưu tầm cụ thể cho bản demo? | Focus demo, không dàn trải | Chọn 1 category cụ thể (trading cards? sneakers? đồ cổ? figure?) để demo rõ ràng | Quốc | ⬜ OPEN |

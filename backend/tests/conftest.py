@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "ai-pipeline"))
 sys.path.insert(0, str(ROOT / "ai-pipeline" / "tests"))
 
 # Không để .env thật của dev lọt vào test
-for k in ("RPC_URL", "AGENT_PRIVATE_KEY", "ESCROW_ADDRESS", "ALLOWED_HOSTS"):
+for k in ("RPC_URL", "AGENT_PRIVATE_KEY", "ESCROW_ADDRESS", "ALLOWED_HOSTS", "ATTEST_API_KEY", "ALLOW_LOCAL_HOSTS", "CORS_ORIGINS"):
     os.environ.pop(k, None)
 
 
@@ -57,6 +57,19 @@ def _find_bin(name: str):
         return p
     cand = Path.home() / ".foundry" / "bin" / (name + (".exe" if os.name == "nt" else ""))
     return str(cand) if cand.exists() else None
+
+
+@pytest.fixture
+def settings(tmp_path):
+    """Fixture Settings cho unit/integration test với host và api key phù hợp."""
+    import attest_service as svc
+    return svc.Settings(
+        data_dir=tmp_path / "data",
+        attest_api_key="test-api-key",
+        allowed_hosts=["127.0.0.1", "gateway.pinata.cloud"],
+        allow_local_hosts=True,
+        cors_origins=["http://localhost:3000"],
+    )
 
 
 @pytest.fixture(scope="session")
