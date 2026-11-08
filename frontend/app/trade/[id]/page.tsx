@@ -1,0 +1,617 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { useAccount, useWriteContract, usePublicClient } from 'wagmi';
+import { escrowAddress, escrowAbi, chainId } from '@/lib/contracts';
+import { targetChain } from '@/lib/wagmi';
+import { useTrade } from '@/hooks/useTrade';
+import { useReputation } from '@/hooks/useReputation';
+import { StateBadge } from '@/components/StateBadge';
+import { AddressDisplay } from '@/components/AddressDisplay';
+import { AvaxAmount } from '@/components/AvaxAmount';
+import { NonceCard } from '@/components/NonceCard';
+import { CountdownTimer } from '@/components/CountdownTimer';
+import { TradeTimeline } from '@/components/TradeTimeline';
+import { EvidencePlaceholder } from '@/components/EvidencePlaceholder';
+import { formatDateTime, formatAvax } from '@/lib/format';
+import { getReadableError } from '@/lib/errors';
+import {
+  ShieldCheck,
+  Coins,
+  User,
+  ArrowLeft,
+  AlertTriangle,
+  Lock,
+  Unlock,
+  CheckCircle2,
+  XCircle,
+  FileText,
+  Loader2,
+  Clock,
+  Sparkles,
+} from 'lucide-react';
+import { toast } from 'sonner';
+
+export default function TradeDetailPage() {
+  const params = useParams();
+  const tradeIdStr = params?.id as string;
+  const tradeId = BigInt(tradeIdStr || '0');
+
+  const { address, isConnected, chain } = useAccount();
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
+
+  const { trade, role, exists, isLoading, refetch } = useTrade(tradeId);
+
+  // Reputation queries for parties
+  const { score: sellerReputation } = useReputation(trade?.seller);
+  const { score: buyerReputation } = useReputation(trade?.buyer);
+
+  // Local metadata (title, description from local storage)
+  const [meta, setMeta] = useState<{ title?: string; description?: string } | null>(null);
+  const [isPendingTx, setIsPendingTx] = useState(false);
+
+  useEffect(() => {
+    if (tradeIdStr) {
+      try {
+        const stored = localStorage.getItem(`meta:${chainId}:${tradeIdStr}`);
+        if (stored) {
+          setMeta(JSON.parse(stored));
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }, [tradeIdStr]);
+
+  const isWrongChain = Boolean(isConnected && chain && chain.id !== targetChain.id);
+  const isActionDisabled = !isConnected || isWrongChain || isPendingTx;
+
+  // Deposit statuses
+  const sellerHasDeposited = trade ? trade.sellerDeposit >= trade.depositRequired && trade.depositRequired > 0n : false;
+  const buyerHasDeposited = trade ? trade.buyerDeposit >= trade.depositRequired && trade.depositRequired > 0n : false;
+
+  // Evidence statuses
+  const isZeroHash = (h?: string) => !h || h === '0x' || h === '0x0000000000000000000000000000000000000000000000000000000000000000';
+  const sellerHasEvidence = trade ? !isZeroHash(trade.sellerEvidenceHash) : false;
+  const buyerHasEvidence = trade ? !isZeroHash(trade.buyerEvidenceHash) : false;
+
+  // Helper function to execute contract transactions with toast feedback
+  const handleTx = async (
+    fnName: string,
+    args: any[] = [],
+    value: bigint = 0n,
+    loadingMsg: string,
+    successMsg: string
+  ) => {
+    if (isActionDisabled) return;
+
+    setIsPendingTx(true);
+    const toastId = toast.loading(loadingMsg);
+
+    try {
+      const txHash = await writeContractAsync({
+        address: escrowAddress,
+        abi: escrowAbi,
+        functionName: fnName,
+        args,
+        ...(value > 0n ? { value } : {}),
+      } as any);
+
+      toast.loading('Giao dịch đã gửi! Đang chờ xác nhận trên blockchain...', { id: toastId });
+
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+        if (receipt.status !== 'success') {
+          throw new Error('Giao dịch bị revert.');
+        }
+      }
+
+      toast.success(successMsg, { id: toastId });
+      await refetch();
+    } catch (err: any) {
+      console.error(`Error executing ${fnName}:`, err);
+      const readable = getReadableError(err);
+      toast.error(`Thao tác thất bại: ${readable}`, { id: toastId });
+    } finally {
+      setIsPendingTx(false);
+    }
+  };
+
+  // Actions
+  const handleDeposit = () => {
+    if (!trade) return;
+    handleTx(
+      'deposit',
+      [trade.id],
+      trade.depositRequired,
+      `Đang ký nạp cọc ${formatAvax(trade.depositRequired)} AVAX...`,
+      'Nạp cọc thành công!'
+    );
+  };
+
+  const handleCancelUnfunded = () => {
+    if (!trade) return;
+    handleTx(
+      'cancelUnfunded',
+      [trade.id],
+      0n,
+      'Đang ký hủy giao dịch...',
+      'Đã hủy giao dịch và hoàn cọc (nếu có) thành công!'
+    );
+  };
+
+  const handleResolveClean = () => {
+    if (!trade) return;
+    handleTx(
+      'resolveClean',
+      [trade.id],
+      0n,
+      'Đang ký giải ngân giao dịch...',
+      'Giải ngân thành công! Tiền hàng và cọc đã được chuyển.'
+    );
+  };
+
+  const handleFileComplaint = () => {
+    if (!trade) return;
+    handleTx(
+      'fileComplaint',
+      [trade.id],
+      0n,
+      'Đang mở khiếu nại tranh chấp...',
+      'Đã gửi khiếu nại thành công! Trọng tài sẽ xử lý.'
+    );
+  };
+
+  const handleCancelTimeout = () => {
+    if (!trade) return;
+    handleTx(
+      'cancelOnEvidenceTimeout',
+      [trade.id],
+      0n,
+      'Đang hủy giao dịch do hết hạn...',
+      'Đã hủy giao dịch và hoàn cọc do quá hạn bằng chứng.'
+    );
+  };
+
+  if (isLoading) {
+    return (
+      <div className="max-w-4xl mx-auto py-16 text-center space-y-4">
+        <div className="inline-block w-8 h-8 border-2 border-rose-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-slate-400">Đang đọc thông tin giao dịch từ Smart Contract...</p>
+      </div>
+    );
+  }
+
+  if (!exists || !trade) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 text-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-6 h-6 text-amber-400" />
+        </div>
+        <h2 className="text-xl font-bold text-white">Giao dịch #{tradeIdStr} không tồn tại</h2>
+        <p className="text-xs text-slate-400">
+          Hợp đồng Escrow không tìm thấy giao dịch này trên mạng {targetChain.name}.
+        </p>
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Về trang chủ
+        </Link>
+      </div>
+    );
+  }
+
+  const titleText = meta?.title || `Vật phẩm sưu tầm #${trade.id.toString()}`;
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const isEvidenceExpired = trade.evidenceDeadline > 0n && nowUnix > Number(trade.evidenceDeadline);
+  const isDisputeExpired = trade.disputeDeadline > 0n && nowUnix > Number(trade.disputeDeadline);
+
+  return (
+    <div className="max-w-5xl mx-auto py-4 space-y-8">
+      {/* Top Navigation & Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/80 pb-6">
+        <div className="space-y-1">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors mb-2"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Quay lại danh sách
+          </Link>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+              {titleText}
+            </h1>
+            <span className="font-mono text-sm px-2.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+              #{trade.id.toString()}
+            </span>
+          </div>
+          <div className="text-xs text-slate-400 flex items-center gap-2">
+            <span>Tạo lúc: {formatDateTime(trade.createdAt)}</span>
+            <span>•</span>
+            <span>Vai trò của bạn:</span>
+            <span className="font-semibold text-indigo-400 uppercase">
+              {role === 'seller' ? 'Người bán' : role === 'buyer' ? 'Người mua' : 'Khách xem'}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <StateBadge state={trade.state} flagged={trade.flagged} />
+        </div>
+      </div>
+
+      {/* Timeline Stepper */}
+      <div className="p-4 sm:p-6 rounded-2xl bg-slate-900/40 border border-slate-800">
+        <TradeTimeline state={trade.state} flagged={trade.flagged} />
+      </div>
+
+      {/* Main 2-Column Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Left Column: Details & Parties (7 cols) */}
+        <div className="lg:col-span-7 space-y-6">
+          {/* Item Description Card */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <FileText className="w-4 h-4 text-indigo-400" />
+              Thông tin thỏa thuận
+            </h3>
+
+            {meta?.description && (
+              <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80">
+                {meta.description}
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-4 pt-2">
+              <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+                <span className="text-[11px] text-slate-400">Giá trị món hàng:</span>
+                <div>
+                  <AvaxAmount amountWei={trade.itemValue} size="lg" />
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+                <span className="text-[11px] text-slate-400">Cọc yêu cầu mỗi bên (30%):</span>
+                <div>
+                  <AvaxAmount amountWei={trade.depositRequired} size="lg" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Parties Card (Seller & Buyer) */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-6">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <User className="w-4 h-4 text-indigo-400" />
+              Các bên tham gia hợp đồng
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Seller Box */}
+              <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-blue-400">Người bán (Seller)</span>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    Rep: {sellerReputation}/100
+                  </span>
+                </div>
+                <div>
+                  <AddressDisplay address={trade.seller} />
+                </div>
+                <div className="space-y-1 pt-1 text-[11px] border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Tiền cọc:</span>
+                    {sellerHasDeposited ? (
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Đã nạp cọc
+                      </span>
+                    ) : (
+                      <span className="text-amber-400 flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" /> Chưa nạp
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Bằng chứng:</span>
+                    {sellerHasEvidence ? (
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Đã nộp
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">Chưa nộp</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Buyer Box */}
+              <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-purple-400">Người mua (Buyer)</span>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    Rep: {buyerReputation}/100
+                  </span>
+                </div>
+                <div>
+                  <AddressDisplay address={trade.buyer} />
+                </div>
+                <div className="space-y-1 pt-1 text-[11px] border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Tiền cọc:</span>
+                    {buyerHasDeposited ? (
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Đã nạp cọc
+                      </span>
+                    ) : (
+                      <span className="text-amber-400 flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" /> Chưa nạp
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Bằng chứng:</span>
+                    {buyerHasEvidence ? (
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Đã nộp
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">Chưa nộp</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Evidence Submission Placeholder (Phase 4C 준비) */}
+          {trade.state === 1 && (
+            <EvidencePlaceholder
+              role={role}
+              hasSubmitted={role === 'seller' ? sellerHasEvidence : buyerHasEvidence}
+            />
+          )}
+        </div>
+
+        {/* Right Column: Timers, Nonce & Action Panel (5 cols) */}
+        <div className="lg:col-span-5 space-y-6">
+          {/* Active Deadlines Card */}
+          {(trade.evidenceDeadline > 0n || trade.disputeDeadline > 0n) && (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 space-y-3">
+              <span className="text-xs font-semibold text-slate-400 block">Thời hạn Smart Contract:</span>
+              <div className="flex flex-col gap-2">
+                {trade.state === 1 && trade.evidenceDeadline > 0n && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-300">Hạn nộp bằng chứng:</span>
+                    <CountdownTimer deadline={trade.evidenceDeadline} />
+                  </div>
+                )}
+                {trade.state === 2 && trade.disputeDeadline > 0n && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-300">Hạn khiếu nại tranh chấp:</span>
+                    <CountdownTimer deadline={trade.disputeDeadline} />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* AC-04: NonceCard (hiện khi state >= 1) */}
+          <NonceCard nonce={trade.nonce} state={trade.state} />
+
+          {/* AC-03 & AC-09: Action Panel */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5 shadow-xl">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              Thao tác Hợp đồng (Action Panel)
+            </h3>
+
+            {/* Warning if wallet disconnected or wrong chain */}
+            {!isConnected && (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+                Vui lòng kết nối ví để thực hiện giao dịch nạp cọc hoặc ký hợp đồng.
+              </div>
+            )}
+            {isWrongChain && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
+                Ví đang ở sai mạng. Vui lòng chuyển sang {targetChain.name}.
+              </div>
+            )}
+
+            {/* State 0: Created */}
+            {trade.state === 0 && (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Giao dịch đang ở trạng thái <strong>Chờ nạp cọc</strong>. Cả Người bán và Người mua cần nạp đủ số tiền cọc để hợp đồng kích hoạt mã nonce.
+                </p>
+
+                {/* Seller deposit button */}
+                {role === 'seller' && !sellerHasDeposited && (
+                  <button
+                    type="button"
+                    onClick={handleDeposit}
+                    disabled={isActionDisabled}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-semibold text-xs shadow-lg active:scale-95 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+                  >
+                    {isPendingTx ? <Loader2 className="w-4 h-4 animate-spin" /> : <Coins className="w-4 h-4" />}
+                    <span>Nạp cọc Người bán ({formatAvax(trade.depositRequired)} AVAX)</span>
+                  </button>
+                )}
+
+                {/* Buyer deposit button */}
+                {role === 'buyer' && !buyerHasDeposited && (
+                  <button
+                    type="button"
+                    onClick={handleDeposit}
+                    disabled={isActionDisabled}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-semibold text-xs shadow-lg active:scale-95 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+                  >
+                    {isPendingTx ? <Loader2 className="w-4 h-4 animate-spin" /> : <Coins className="w-4 h-4" />}
+                    <span>Nạp cọc Người mua ({formatAvax(trade.depositRequired)} AVAX)</span>
+                  </button>
+                )}
+
+                {/* Already deposited note */}
+                {((role === 'seller' && sellerHasDeposited) || (role === 'buyer' && buyerHasDeposited)) && (
+                  <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs space-y-2">
+                    <p className="font-semibold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4" />
+                      Bạn đã nạp cọc thành công!
+                    </p>
+                    <p className="text-[11px] text-emerald-400/80">
+                      Đang đợi đối tác nạp cọc. Nếu đối tác không nạp, bạn có thể bấm nút bên dưới để hủy và rút lại tiền cọc.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleCancelUnfunded}
+                      disabled={isActionDisabled}
+                      className="w-full mt-2 py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition-colors"
+                    >
+                      Hủy giao dịch &amp; Rút lại cọc
+                    </button>
+                  </div>
+                )}
+
+                {role === 'viewer' && (
+                  <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400">
+                    Bạn đang xem với tư cách người ngoài. Chỉ Người bán ({trade.seller.slice(0, 6)}...) và Người mua ({trade.buyer.slice(0, 6)}...) mới có quyền nạp cọc.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* State 1: AwaitingEvidence */}
+            {trade.state === 1 && (
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs space-y-2">
+                  <p className="font-semibold flex items-center gap-1.5">
+                    <Lock className="w-4 h-4" />
+                    Cả 2 bên đã nạp cọc đủ!
+                  </p>
+                  <p className="text-[11px] text-blue-300/80 leading-relaxed">
+                    Vui lòng sử dụng <strong>Mã Nonce</strong> ở trên khi ghi hình bằng chứng. Sau khi cả 2 bên nộp bằng chứng, mô hình AI sẽ tự động phân tích và ký xác thực on-chain.
+                  </p>
+                </div>
+
+                {isEvidenceExpired && (
+                  <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs space-y-2">
+                    <p className="font-semibold">Đã quá thời hạn nộp bằng chứng!</p>
+                    <button
+                      type="button"
+                      onClick={handleCancelTimeout}
+                      disabled={isActionDisabled}
+                      className="w-full py-2.5 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition-colors"
+                    >
+                      Hủy giao dịch &amp; Hoàn cọc (Timeout)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* State 2: Attested */}
+            {trade.state === 2 && (
+              <div className="space-y-4">
+                {trade.flagged ? (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-sm">
+                      <AlertTriangle className="w-4 h-4 text-amber-400" />
+                      <span>AI Cảnh Báo Rủi Ro (Flagged)</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      Điểm rủi ro AI: <strong>{trade.riskScore}/100</strong>. Phát hiện dấu hiệu bất thường (lệch vật phẩm hoặc sai mã nonce). Cần mở tranh chấp để trọng tài can thiệp.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleFileComplaint}
+                      disabled={isActionDisabled}
+                      className="w-full py-2.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs transition-colors"
+                    >
+                      Mở khiếu nại tranh chấp (File Complaint)
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs space-y-3">
+                    <div className="flex items-center gap-2 font-bold text-sm">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span>AI Xác Thực Sạch (Risk: {trade.riskScore}/100)</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      Mọi bằng chứng và mã nonce đều khớp với thông tin niêm yết. Thời gian mở khiếu nại đang đếm ngược.
+                    </p>
+
+                    {/* Complaint button during dispute window */}
+                    {!isDisputeExpired && (
+                      <button
+                        type="button"
+                        onClick={handleFileComplaint}
+                        disabled={isActionDisabled}
+                        className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-rose-300 text-xs font-medium border border-slate-700 transition-colors"
+                      >
+                        Mở khiếu nại (nếu phát hiện sai sót)
+                      </button>
+                    )}
+
+                    {/* Resolve clean button when dispute window expired */}
+                    {isDisputeExpired && (
+                      <button
+                        type="button"
+                        onClick={handleResolveClean}
+                        disabled={isActionDisabled}
+                        className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg active:scale-95 transition-all"
+                      >
+                        Giải ngân thanh toán &amp; Hoàn cọc (Resolve Clean)
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* State 3: Disputed */}
+            {trade.state === 3 && (
+              <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs space-y-2">
+                <p className="font-bold text-sm flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4" />
+                  Đang trong quá trình tranh chấp
+                </p>
+                <p className="text-[11px] text-red-300/80 leading-relaxed">
+                  Khiếu nại đã được ghi nhận on-chain. Trọng tài (owner của hợp đồng) sẽ kiểm tra hồ sơ và quyết định phân xử, hoàn cọc hoặc áp dụng mức phạt 5%.
+                </p>
+              </div>
+            )}
+
+            {/* State 4: Resolved */}
+            {trade.state === 4 && (
+              <div className="p-4 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs space-y-2">
+                <p className="font-bold text-sm flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Giao dịch hoàn tất thành công!
+                </p>
+                <p className="text-[11px] text-teal-300/80 leading-relaxed">
+                  Tiền hàng và tiền cọc đã được giải ngân cho các bên theo đúng điều khoản hợp đồng. Điểm uy tín (reputation) của cả 2 bên đã được cộng thêm điểm.
+                </p>
+              </div>
+            )}
+
+            {/* State 5: Cancelled */}
+            {trade.state === 5 && (
+              <div className="p-4 rounded-xl bg-gray-500/10 border border-gray-500/30 text-gray-400 text-xs space-y-1">
+                <p className="font-bold text-sm flex items-center gap-1.5">
+                  <XCircle className="w-4 h-4" />
+                  Giao dịch đã hủy
+                </p>
+                <p className="text-[11px]">Hợp đồng đã kết thúc và tiền cọc đã được hoàn trả.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

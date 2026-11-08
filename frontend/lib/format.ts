@@ -83,3 +83,57 @@ export function getStateInfo(state: number, flagged?: boolean): StateInfo {
   }
   return STATE_MAP[state] || STATE_MAP[0];
 }
+
+export function formatCountdown(deadlineSeconds?: bigint | number | null): {
+  text: string;
+  isExpired: boolean;
+  secondsRemaining: number;
+} {
+  if (!deadlineSeconds) {
+    return { text: '--', isExpired: false, secondsRemaining: 0 };
+  }
+
+  const deadline = typeof deadlineSeconds === 'bigint' ? Number(deadlineSeconds) : deadlineSeconds;
+  if (deadline <= 0) {
+    return { text: '--', isExpired: false, secondsRemaining: 0 };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const diff = deadline - now;
+
+  if (diff <= 0) {
+    return { text: 'Hết hạn', isExpired: true, secondsRemaining: 0 };
+  }
+
+  const days = Math.floor(diff / 86400);
+  const hours = Math.floor((diff % 86400) / 3600);
+  const minutes = Math.floor((diff % 3600) / 60);
+  const seconds = diff % 60;
+
+  if (days > 0) {
+    return { text: `${days}d ${hours}h ${minutes}m`, isExpired: false, secondsRemaining: diff };
+  }
+  if (hours > 0) {
+    return { text: `${hours}h ${minutes}m ${seconds}s`, isExpired: false, secondsRemaining: diff };
+  }
+  return { text: `${minutes}m ${seconds}s`, isExpired: false, secondsRemaining: diff };
+}
+
+export function formatNonceShort(nonce?: string | null): string {
+  if (!nonce || nonce.length < 10) return '';
+  return nonce.slice(2, 10).toLowerCase();
+}
+
+export function formatDateTime(timestampSeconds?: bigint | number | null): string {
+  if (!timestampSeconds) return '--';
+  const ts = typeof timestampSeconds === 'bigint' ? Number(timestampSeconds) : timestampSeconds;
+  if (ts <= 0) return '--';
+  return new Date(ts * 1000).toLocaleString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+

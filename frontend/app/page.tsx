@@ -2,6 +2,9 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { useAccount } from 'wagmi';
+import { useMyTrades } from '@/hooks/useMyTrades';
+import { TradeList } from '@/components/TradeList';
 import { StateBadge } from '@/components/StateBadge';
 import { AddressDisplay } from '@/components/AddressDisplay';
 import { AvaxAmount } from '@/components/AvaxAmount';
@@ -19,6 +22,9 @@ import {
 } from 'lucide-react';
 
 export default function HomePage() {
+  const { isConnected } = useAccount();
+  const { trades, isLoading: isLoadingTrades } = useMyTrades();
+
   return (
     <div className="space-y-16 py-4">
       {/* Hero Section */}
@@ -100,6 +106,44 @@ export default function HomePage() {
             </p>
           </div>
         </div>
+      </section>
+
+      {/* My Trades Section (AC-06) */}
+      <section className="space-y-4 pt-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-rose-500" />
+              Giao Dịch Của Tôi
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Danh sách các hợp đồng ký quỹ gắn liền với ví của bạn trên mạng {targetChain.name}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/trade/new"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-semibold shadow-md active:scale-95 transition-all"
+            >
+              <PlusCircle className="w-4 h-4" />
+              Tạo giao dịch mới
+            </Link>
+          </div>
+        </div>
+
+        {isConnected ? (
+          <TradeList
+            trades={trades}
+            isLoading={isLoadingTrades}
+            emptyMessage="Ví của bạn chưa tạo hoặc tham gia giao dịch nào trên hợp đồng Escrow."
+          />
+        ) : (
+          <div className="p-8 rounded-2xl border border-dashed border-slate-800 bg-slate-900/30 text-center space-y-3">
+            <p className="text-sm text-slate-300">
+              Vui lòng kết nối ví ở góc phải Navbar để xem danh sách giao dịch của bạn.
+            </p>
+          </div>
+        )}
       </section>
 
       {/* Component Showcase & Design System Section (AC-08) */}
