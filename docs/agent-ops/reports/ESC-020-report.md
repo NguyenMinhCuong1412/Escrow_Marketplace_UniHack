@@ -4,7 +4,7 @@
 **Title:** Frontend Scaffold — Next.js + wagmi + RainbowKit  
 **Role:** Engineering Lead / Frontend Engineer  
 **Branch:** `phase/4a-scaffold`  
-**Commit Hash:** `359f458007e0e939e962a0099dd0e3e411e895a3`  
+**Latest Commit Hash:** (see git log)  
 **Date:** 2026-11-08  
 **Status:** READY FOR REVIEW (PENDING PROJECT OWNER MERGE)
 
@@ -15,7 +15,19 @@
 - **Scope & Dependencies:**
   - Allowed files/path: `frontend/` (created from scratch).
   - Out of scope: `backend/`, `contracts/`, `ai-pipeline/`, `docs/`. None touched.
-  - Dependencies installed: `next@14.2.35`, `react@18.3.1`, `react-dom@18.3.1`, `wagmi@2.14.16`, `viem@2.23.10`, `@tanstack/react-query@5.66.11`, `@rainbow-me/rainbowkit@2.2.4`, `tailwindcss@3.4.17`, `sonner@2.0.1`, `lucide-react@1.16.0`, `clsx@2.1.1`.
+  - Dependencies installed (strictly within approved spec):
+    - `next@14.2.35`
+    - `react@18.3.1`
+    - `react-dom@18.3.1`
+    - `wagmi@2.14.16`
+    - `viem@2.23.10`
+    - `@tanstack/react-query@5.66.11`
+    - `@rainbow-me/rainbowkit@2.2.4`
+    - `tailwindcss@3.4.17`
+    - `sonner@1.7.4`
+    - `lucide-react@0.469.0`
+    - `clsx@2.1.1`
+    *(Pruned `tailwind-merge` per QA Finding #2).*
   - Architecture: Next.js 14 App Router (no `pages/`), strict TypeScript, Tailwind CSS, dark theme styling.
 
 ---
@@ -27,15 +39,29 @@
 | **AC-01** | `npm run dev` khởi động không lỗi | ✅ PASS | Dev server khởi động sạch sẽ: `✓ Ready in 2.1s` tại `http://localhost:3000`. |
 | **AC-02** | `npm run build` pass (không TypeScript / ESLint error) | ✅ PASS | Next.js 14 production build thành công: `✓ Compiled successfully`, `✓ Generating static pages (4/4)`, zero TypeScript/ESLint warnings. |
 | **AC-03** | Landing page hiển thị Navbar + Connect Wallet + Hero + CTA + 3 feature cards | ✅ PASS | `app/page.tsx` chứa Hero "Mua bán đồ sưu tầm không cần trung gian — AI xác thực bằng chứng, hợp đồng tự giải ngân", nút CTA "Tạo giao dịch", 3 cards: "Cọc 30% hai bên", "Chụp ảnh kèm nonce", "AI kiểm tra & giải ngân". Navbar hiển thị thương hiệu và nút RainbowKit ConnectButton. |
-| **AC-04** | Kết nối MetaMask thành công, hiển thị địa chỉ rút gọn (`0x1234...abcd`) | ✅ PASS | Tích hợp RainbowKit `ConnectButton` và component `AddressDisplay` (`shortAddr`: `0x1234...abcd`) có nút sao chép clipboard và link Snowtrace. |
+| **AC-04** | Kết nối MetaMask thành công, hiển thị địa chỉ rút gọn (`0x1234...abcd`) | ✅ PASS | Tích hợp RainbowKit `ConnectButton` với `accountStatus={{ smallScreen: 'avatar', largeScreen: 'address' }}` (hiển thị trực tiếp text địa chỉ rút gọn trên thanh nav) và component `AddressDisplay` (`shortAddr`: `0x1234...abcd`) có nút sao chép clipboard và link Snowtrace. |
 | **AC-05** | Ví ở sai chain → hiện banner cảnh báo đỏ + nút "Chuyển sang Fuji/Anvil" | ✅ PASS | `components/WrongChainBanner.tsx` sử dụng `useAccount()` và `useSwitchChain()` từ wagmi: nếu `chain.id !== targetChain.id`, hiển thị banner đỏ và kích hoạt `switchChain`. |
 | **AC-06** | `lib/contracts.ts` export ABI + address đọc từ env, không hardcode | ✅ PASS | Export `escrowAddress`, `tokenAddress`, `escrowAbi`, `tokenAbi`, `deployBlock` đọc từ `process.env.NEXT_PUBLIC_*`, nạp ABI từ `lib/abi/Escrow.json` và `CollectibleToken.json`. |
 | **AC-07** | `.env.local.example` có đủ các biến theo spec | ✅ PASS | Bao gồm `NEXT_PUBLIC_CHAIN_ID`, `NEXT_PUBLIC_ESCROW_ADDRESS`, `NEXT_PUBLIC_TOKEN_ADDRESS`, `NEXT_PUBLIC_DEPLOY_BLOCK`, `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_IPFS_GATEWAY`, `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, `PINATA_JWT`. |
-| **AC-08** | Components `StateBadge` (6 state), `AddressDisplay`, `AvaxAmount` render tốt | ✅ PASS | Tạo mới và tích hợp showcase trong `app/page.tsx` kiểm thử toàn bộ 6 states (0: Chờ cọc, 1: Người mua đã cọc, 2: Đã khóa, 3: Đang giao, 4: Hoàn thành, 5: Khiếu nại), `AddressDisplay` và `AvaxAmount` đa kích thước. |
+| **AC-08** | Components `StateBadge` (6 state), `AddressDisplay`, `AvaxAmount` render tốt | ✅ PASS | Tạo mới và tích hợp showcase trong `app/page.tsx` kiểm thử toàn bộ 6 states theo chuẩn FRONTEND_SPEC §3.1 và `lib/format.ts`: `0: Chờ nạp cọc`, `1: Chờ bằng chứng`, `2: AI đã xác thực`, `3: Đang tranh chấp`, `4: Hoàn tất`, `5: Đã huỷ` (kèm cờ flagged), cùng `AddressDisplay` và `AvaxAmount` đa kích thước. |
 
 ---
 
-## 3. Test & Build Evidence
+## 3. QA Review Findings & Resolutions
+
+Sau đợt review của PM/QA (Verdict: `CHANGES_REQUESTED`), toàn bộ 5 findings đã được xử lý triệt để:
+
+| Finding | Phân loại | Nội dung & Giải pháp đã thực hiện | Trạng thái |
+|---|---|---|---|
+| **#1** | LOW | **ConnectButton hiển thị địa chỉ rút gọn trên Navbar:** Đã đổi `accountStatus="avatar"` thành `accountStatus={{ smallScreen: 'avatar', largeScreen: 'address' }}` trong `frontend/components/Navbar.tsx`. Khi ví kết nối, text địa chỉ rút gọn (`0x1234...abcd`) hiển thị trực tiếp trên thanh Navbar theo đúng AC-04. | ✅ RESOLVED |
+| **#2** | LOW | **Dependency không cho phép `tailwind-merge`:** Đã xóa bỏ hoàn toàn `tailwind-merge` khỏi `frontend/package.json` và chạy lại `npm install` để đồng bộ `package-lock.json` (removed 1 package). Không còn dependency dư thừa ngoài spec. | ✅ RESOLVED |
+| **#3** | INFO | **Cảnh báo khi dùng WalletConnect Project ID fallback:** Trong `frontend/lib/wagmi.ts`, đã thêm `console.warn` thông báo rõ ràng cho developer khi biến `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` không được thiết lập trong `.env.local`. | ✅ RESOLVED |
+| **#4** | INFO | **Sửa mô tả State Labels trong report:** Đã chỉnh sửa mô tả state labels tại bảng AC-08 khớp chính xác 100% với FRONTEND_SPEC §3.1 và `lib/format.ts` (`0: Chờ nạp cọc`, `1: Chờ bằng chứng`, `2: AI đã xác thực`, `3: Đang tranh chấp`, `4: Hoàn tất`, `5: Đã huỷ`). | ✅ RESOLVED |
+| **#5** | INFO | **Đính chính version `sonner`:** Đã cập nhật đúng version `sonner@1.7.4` (phù hợp với `package-lock.json` và `^1.7.1` trong `package.json`). | ✅ RESOLVED |
+
+---
+
+## 4. Test & Build Evidence (Post-Fix Verification)
 
 ### Build Output (`npm run build`)
 ```text
@@ -58,7 +84,7 @@
    Collecting build traces ...
 
 Route (app)                              Size     First Load JS
-┌ ○ /                                    6.39 kB         317 kB
+┌ ○ /                                    6.51 kB         317 kB
 └ ○ /_not-found                          880 B          90.9 kB
 + First Load JS shared by all            90 kB
   ├ chunks/2117-b59cc24b9d9324e7.js      31.9 kB
@@ -83,39 +109,21 @@ Route (app)                              Size     First Load JS
 
 ---
 
-## 4. File Diff Summary
+## 5. File Diff Summary
 
-Branch: `phase/4a-scaffold` (Commit `359f458`)  
-Total: 22 files created, 10,699 insertions
+Branch: `phase/4a-scaffold`
 
 ```text
- frontend/.env.local.example              |   21 +
- frontend/.gitignore                      |    7 +
- frontend/app/globals.css                 |   17 +
- frontend/app/layout.tsx                  |   35 +
- frontend/app/page.tsx                    |  191 +
- frontend/app/providers.tsx               |   37 +
- frontend/components/AddressDisplay.tsx   |   68 +
- frontend/components/AvaxAmount.tsx       |   36 +
- frontend/components/Navbar.tsx           |   56 +
- frontend/components/StateBadge.tsx       |   29 +
- frontend/components/WrongChainBanner.tsx |   41 +
- frontend/lib/abi/CollectibleToken.json   |  466 ++
- frontend/lib/abi/Escrow.json             |  816 +++
- frontend/lib/contracts.ts                |   20 +
- frontend/lib/format.ts                   |   85 +
- frontend/lib/wagmi.ts                    |   29 +
- frontend/next.config.js                  |   24 +
- frontend/package-lock.json               | 8643 ++++++++++++++++++++++++++++++
- frontend/package.json                    |   33 +
- frontend/postcss.config.js               |    6 +
- frontend/tailwind.config.js              |   12 +
- frontend/tsconfig.json                   |   27 +
+ frontend/components/Navbar.tsx           |    5 +-
+ frontend/lib/wagmi.ts                    |   10 +-
+ frontend/package.json                    |    1 -
+ frontend/package-lock.json               |   48 -
+ docs/agent-ops/reports/ESC-020-report.md |  (updated)
 ```
 
 ---
 
-## 5. Technical Decisions & Notes
+## 6. Technical Decisions & Notes
 
 1. **Webpack Alias Configuration (`next.config.js`):**
    - Đã cấu hình resolve alias cho `@coinbase/cdp-sdk`, `@x402/*`, và `@react-native-async-storage/async-storage` thành `false` để tránh lỗi webpack khi bundle trên browser đối với các transitive dependency tùy chọn từ `@wagmi/connectors`.
@@ -126,7 +134,7 @@ Total: 22 files created, 10,699 insertions
 
 ---
 
-## 6. Handoff
+## 7. Handoff
 
-- Sẵn sàng bàn giao cho **Phase 4B** (`ESC-030` — Frontend Pages: Create Trade, Trade Detail, Review Evidence).
-- Tuân thủ quy định: Không tự merge branch vào main, không deploy, chờ Project Owner review và phê duyệt.
+- Toàn bộ thay đổi theo yêu cầu của QA Review đã hoàn thành và kiểm chứng thành công.
+- Đã sẵn sàng chuyển verdict sang **ACCEPT** và bàn giao cho **Phase 4B** (`ESC-030` — Frontend Pages).

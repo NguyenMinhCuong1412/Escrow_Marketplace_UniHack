@@ -17,9 +17,17 @@ export const configuredChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || 4311
 export const isAnvil = configuredChainId === 31337;
 export const targetChain = isAnvil ? anvilChain : avalancheFuji;
 
+const envProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+if (!envProjectId && typeof window !== 'undefined') {
+  console.warn(
+    '[wagmi] NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not configured in .env.local; using fallback project ID for development.'
+  );
+}
+export const walletConnectProjectId = envProjectId || '3a8170812b534d0ff9d794f19a901d64';
+
 export const wagmiConfig = getDefaultConfig({
   appName: 'Collectible Escrow',
-  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '3a8170812b534d0ff9d794f19a901d64',
+  projectId: walletConnectProjectId,
   chains: [avalancheFuji, anvilChain],
   transports: {
     [avalancheFuji.id]: http('https://api.avax-test.network/ext/bc/C/rpc'),

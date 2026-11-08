@@ -45,7 +45,10 @@ export const Navbar: React.FC = () => {
           <ConnectButton
             showBalance={false}
             chainStatus="icon"
-            accountStatus="avatar"
+            accountStatus={{
+              smallScreen: 'avatar',
+              largeScreen: 'address',
+            }}
           />
         </div>
       </div>
