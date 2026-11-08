@@ -1,0 +1,816 @@
+{
+ "abi": [
+  {
+   "type": "constructor",
+   "inputs": [
+    {
+     "name": "tokenAddress",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "agentAddress",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "evidenceWindow",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "attestWindow",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "disputeWindow",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "ATTEST_WINDOW",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "DISPUTE_WINDOW",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "EVIDENCE_WINDOW",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "INITIAL_REPUTATION",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "MAX_DEPOSIT_BPS",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint16",
+     "internalType": "uint16"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "MAX_REPUTATION",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "PENALTY_BPS",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint16",
+     "internalType": "uint16"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "agent",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "attest",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "riskScore",
+     "type": "uint8",
+     "internalType": "uint8"
+    },
+    {
+     "name": "flagged",
+     "type": "bool",
+     "internalType": "bool"
+    },
+    {
+     "name": "reportHash",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "cancelOnEvidenceTimeout",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "cancelUnfunded",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "createTrade",
+   "inputs": [
+    {
+     "name": "buyer",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "itemValue",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "deposit",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "payable"
+  },
+  {
+   "type": "function",
+   "name": "fileComplaint",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "getTrade",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "tuple",
+     "internalType": "struct Escrow.Trade",
+     "components": [
+      {
+       "name": "seller",
+       "type": "address",
+       "internalType": "address"
+      },
+      {
+       "name": "buyer",
+       "type": "address",
+       "internalType": "address"
+      },
+      {
+       "name": "itemValue",
+       "type": "uint256",
+       "internalType": "uint256"
+      },
+      {
+       "name": "depositRequired",
+       "type": "uint256",
+       "internalType": "uint256"
+      },
+      {
+       "name": "sellerDeposit",
+       "type": "uint256",
+       "internalType": "uint256"
+      },
+      {
+       "name": "buyerDeposit",
+       "type": "uint256",
+       "internalType": "uint256"
+      },
+      {
+       "name": "nonce",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "sellerEvidenceHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "buyerEvidenceHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "reportHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "riskScore",
+       "type": "uint8",
+       "internalType": "uint8"
+      },
+      {
+       "name": "flagged",
+       "type": "bool",
+       "internalType": "bool"
+      },
+      {
+       "name": "createdAt",
+       "type": "uint64",
+       "internalType": "uint64"
+      },
+      {
+       "name": "evidenceDeadline",
+       "type": "uint64",
+       "internalType": "uint64"
+      },
+      {
+       "name": "disputeDeadline",
+       "type": "uint64",
+       "internalType": "uint64"
+      },
+      {
+       "name": "state",
+       "type": "uint8",
+       "internalType": "enum Escrow.State"
+      }
+     ]
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "nextTradeId",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "owner",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "pendingWithdrawals",
+   "inputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "reputation",
+   "inputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "reputationInitialized",
+   "inputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "reputationOf",
+   "inputs": [
+    {
+     "name": "who",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "resolveClean",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "resolveDispute",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "violator",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "setAgent",
+   "inputs": [
+    {
+     "name": "newAgent",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "submitEvidence",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "evidenceHash",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "token",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "contract CollectibleToken"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "withdraw",
+   "inputs": [],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "event",
+   "name": "AgentUpdated",
+   "inputs": [
+    {
+     "name": "newAgent",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "Attested",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "riskScore",
+     "type": "uint8",
+     "indexed": false,
+     "internalType": "uint8"
+    },
+    {
+     "name": "flagged",
+     "type": "bool",
+     "indexed": false,
+     "internalType": "bool"
+    },
+    {
+     "name": "reportHash",
+     "type": "bytes32",
+     "indexed": false,
+     "internalType": "bytes32"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "Cancelled",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "reason",
+     "type": "string",
+     "indexed": false,
+     "internalType": "string"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "Deposited",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "who",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "amount",
+     "type": "uint256",
+     "indexed": false,
+     "internalType": "uint256"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "Disputed",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "filer",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "EvidenceSubmitted",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "who",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "evidenceHash",
+     "type": "bytes32",
+     "indexed": false,
+     "internalType": "bytes32"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "FullyFunded",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "evidenceDeadline",
+     "type": "uint64",
+     "indexed": false,
+     "internalType": "uint64"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "PayoutDeferred",
+   "inputs": [
+    {
+     "name": "to",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "amount",
+     "type": "uint256",
+     "indexed": false,
+     "internalType": "uint256"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "ReputationChanged",
+   "inputs": [
+    {
+     "name": "who",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "newScore",
+     "type": "uint256",
+     "indexed": false,
+     "internalType": "uint256"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "ResolvedClean",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "ResolvedDispute",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "violator",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "penaltyAmount",
+     "type": "uint256",
+     "indexed": false,
+     "internalType": "uint256"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "TradeCreated",
+   "inputs": [
+    {
+     "name": "tradeId",
+     "type": "uint256",
+     "indexed": true,
+     "internalType": "uint256"
+    },
+    {
+     "name": "seller",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "buyer",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "itemValue",
+     "type": "uint256",
+     "indexed": false,
+     "internalType": "uint256"
+    },
+    {
+     "name": "nonce",
+     "type": "bytes32",
+     "indexed": false,
+     "internalType": "bytes32"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "Withdrawn",
+   "inputs": [
+    {
+     "name": "to",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "amount",
+     "type": "uint256",
+     "indexed": false,
+     "internalType": "uint256"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "error",
+   "name": "ReentrancyGuardReentrantCall",
+   "inputs": []
+  }
+ ]
+}
