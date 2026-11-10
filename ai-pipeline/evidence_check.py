@@ -397,6 +397,66 @@ class NonceCheck:
     found: bool
     best_candidate: Optional[str]
     edit_distance: Optional[int]
+    method: Optional[str] = None  # "qr" | "ocr" — cách đã đọc được ứng viên tốt nhất
+
+
+# --- Nonce dạng mã QR -------------------------------------------------------
+# Chữ viết tay khiến OCR thiếu ổn định. Mã QR mang 16 ký tự hex đầu của nonce
+# (64 bit, so khớp CHÍNH XÁC, không nới lỗi) đọc được ổn định hơn nhiều qua ảnh
+# chụp màn hình điện thoại / giấy in. Payload ngắn → QR version 2 (25x25 ô), ô to,
+# chịu được ảnh mờ/nghiêng/nén JPEG. OCR chữ viết tay vẫn là phương án dự phòng.
+
+QR_PREFIX = "TP1:"
+QR_NONCE_LEN = 16
+
+
+def qr_payload(nonce_hex: str) -> str:
+    return QR_PREFIX + short_nonce(nonce_hex, QR_NONCE_LEN)
+
+
+def make_nonce_qr(nonce_hex: str, size: int = 480) -> np.ndarray:
+    """Ảnh QR (grayscale, có viền trắng) cho nonce của một giao dịch."""
+    params = cv2.QRCodeEncoder_Params()
+    params.correction_level = cv2.QRCodeEncoder_CORRECT_LEVEL_Q  # phục hồi được ~25% diện tích hỏng
+    qr = cv2.QRCodeEncoder.create(params).encode(qr_payload(nonce_hex))
+    qr = cv2.copyMakeBorder(qr, 2, 2, 2, 2, cv2.BORDER_CONSTANT, value=255)  # quiet zone đủ 4 ô
+    return cv2.resize(qr, (size, size), interpolation=cv2.INTER_NEAREST)
+
+
+def read_qr_texts(bgr: np.ndarray) -> list[str]:
+    """Mọi chuỗi QR đọc được trong ảnh. Thử 2 bộ dò + bản phóng to cho QR nhỏ; lỗi OpenCV → coi như không có."""
+    found: list[str] = []
+    h, w = bgr.shape[:2]
+    variants = [bgr]
+    if max(h, w) <= 1400:
+        variants.append(cv2.resize(bgr, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC))
+    for img in variants:
+        for make in (cv2.QRCodeDetector, getattr(cv2, "QRCodeDetectorAruco", None)):
+            if make is None:
+                continue
+            try:
+                ok, texts, _, _ = make().detectAndDecodeMulti(img)
+            except cv2.error:
+                continue
+            if ok:
+                found += [t for t in texts if t]
+        if found:
+            break
+    return found
+
+
+def _check_nonce_qr(bgr: np.ndarray, expected_nonce_hex: str) -> Optional[NonceCheck]:
+    """None nếu ảnh không có QR của hệ thống; ngược lại kết quả so khớp chính xác."""
+    target = short_nonce(expected_nonce_hex)
+    wrong = None
+    for text in read_qr_texts(bgr):
+        t = text.strip().lower()
+        if t == qr_payload(expected_nonce_hex).lower():
+            return NonceCheck(target, True, target, 0, "qr")
+        if t.startswith(QR_PREFIX.lower()):
+            cand = t[len(QR_PREFIX):][:NONCE_LEN]
+            wrong = NonceCheck(target, False, cand, _levenshtein(target, cand), "qr")
+    return wrong
 
 
 def check_nonce(image, expected_nonce_hex: str, max_edits: int = 1) -> NonceCheck:
@@ -406,13 +466,18 @@ def check_nonce(image, expected_nonce_hex: str, max_edits: int = 1) -> NonceChec
     tăng xác suất trùng ngẫu nhiên lên ~2^-24, vẫn an toàn.
     """
     target = short_nonce(expected_nonce_hex)
+    bgr = _as_bgr(image)
+    # Mã QR trước: nhanh và chính xác. Có QR đúng → xong. Không có / QR của giao dịch khác → thử OCR.
+    qr = _check_nonce_qr(bgr, expected_nonce_hex)
+    if qr is not None and qr.found:
+        return qr
     best, best_d = None, None
-    for text in _ocr_passes(_as_bgr(image)):
+    for text in _ocr_passes(bgr):
         for cand in _nonce_tokens(text):
             norm = cand.translate(_OCR_CONFUSIONS)
             for c in {cand, norm}:
                 if target in c:
-                    return NonceCheck(target, True, target, 0)
+                    return NonceCheck(target, True, target, 0, "ocr")
                 # trượt cửa sổ dài len±1 để bắt lỗi thêm/bớt 1 ký tự
                 for w in (len(target) - 1, len(target), len(target) + 1):
                     for i in range(0, max(len(c) - w + 1, 0)):
@@ -421,7 +486,10 @@ def check_nonce(image, expected_nonce_hex: str, max_edits: int = 1) -> NonceChec
                             best, best_d = c[i:i + w], d
         if best_d is not None and best_d <= max_edits:
             break
-    return NonceCheck(target, best_d is not None and best_d <= max_edits, best, best_d)
+    ocr = NonceCheck(target, best_d is not None and best_d <= max_edits, best, best_d, "ocr" if best else None)
+    if not ocr.found and qr is not None:
+        return qr  # có QR nhưng là của giao dịch khác → báo rõ trong report
+    return ocr
 # O(C * L * 64) thời gian với C ứng viên, L độ dài ứng viên; O(1) không gian thêm
 
 

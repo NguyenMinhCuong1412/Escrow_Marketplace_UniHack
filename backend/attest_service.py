@@ -41,7 +41,7 @@ from typing import Literal, Optional
 from urllib.parse import urlparse, urljoin
 
 import requests
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, Field
 from web3 import Web3
@@ -438,6 +438,24 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         c = get_client()
         return {**t.to_json(), "nonce_short": ec.short_nonce(t.nonce),
                 "seller_reputation": c.reputation_of(t.seller), "buyer_reputation": c.reputation_of(t.buyer)}
+
+    @app.get("/trade/{trade_id}/nonce-qr.png")
+    def nonce_qr(trade_id: int, size: int = 480):
+        """Mã QR chứa nonce của giao dịch: đặt cạnh món hàng khi chụp thay cho viết tay.
+        Sinh bằng cùng thư viện với bộ đọc trong ai-pipeline → chắc chắn đọc lại được."""
+        try:
+            t = get_client().get_trade(trade_id)
+        except ChainError as e:
+            raise HTTPException(502, str(e))
+        if not t.exists:
+            raise HTTPException(404, f"Trade {trade_id} không tồn tại")
+        img = ec.make_nonce_qr(t.nonce, max(160, min(int(size), 1024)))
+        ok, buf = ec.cv2.imencode(".png", img)
+        if not ok:
+            raise HTTPException(500, "Không tạo được mã QR")
+        # nonce bất biến theo trade id → cho trình duyệt cache
+        return Response(content=buf.tobytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
 
     @app.get("/report/{trade_id}")
     def get_report(trade_id: int):

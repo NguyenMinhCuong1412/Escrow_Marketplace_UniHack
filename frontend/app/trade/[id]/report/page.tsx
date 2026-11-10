@@ -282,7 +282,7 @@ export default function EvidenceReportPage() {
           {/* Check 1: Nonce Seller */}
           <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-300">1. Mã Nonce trong ảnh Người bán (OCR)</span>
+              <span className="text-xs font-semibold text-slate-300">1. Mã Nonce trong ảnh Người bán (QR / OCR)</span>
               {report.nonce_ok_seller ? (
                 <span className="text-xs px-2 py-0.5 rounded font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Khớp mã
@@ -299,7 +299,13 @@ export default function EvidenceReportPage() {
                 <span className="text-white font-bold">{details.nonce_seller?.expected || details.expected_nonce_short || '--'}</span>
               </div>
               <div className="flex justify-between">
-                <span>OCR Best Match:</span>
+                <span>Cách đọc:</span>
+                <span className="text-slate-200">
+                  {details.nonce_seller?.method === 'qr' ? 'Mã QR' : details.nonce_seller?.method === 'ocr' ? 'Chữ viết tay (OCR)' : '--'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Mã đọc được:</span>
                 <span className={report.nonce_ok_seller ? 'text-emerald-400' : 'text-red-400'}>
                   {details.nonce_seller?.best_candidate || 'Không nhận diện được'}
                 </span>
@@ -333,7 +339,13 @@ export default function EvidenceReportPage() {
                 <span className="text-white font-bold">{details.nonce_buyer?.expected || details.expected_nonce_short || '--'}</span>
               </div>
               <div className="flex justify-between">
-                <span>OCR Best Match:</span>
+                <span>Cách đọc:</span>
+                <span className="text-slate-200">
+                  {details.nonce_buyer?.method === 'qr' ? 'Mã QR' : details.nonce_buyer?.method === 'ocr' ? 'Chữ viết tay (OCR)' : '--'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Mã đọc được:</span>
                 <span className={report.nonce_ok_buyer ? 'text-emerald-400' : 'text-red-400'}>
                   {details.nonce_buyer?.best_candidate || 'Không nhận diện được'}
                 </span>

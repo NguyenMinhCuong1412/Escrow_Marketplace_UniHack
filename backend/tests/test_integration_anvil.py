@@ -464,3 +464,16 @@ def test_auto_agent_retries_then_gives_up(chain, anvil, file_server, tmp_path, m
     assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
     # nút thủ công vẫn dùng được như phương án dự phòng (ở đây vẫn 422 vì ảnh hỏng)
     assert c.post("/verify-evidence", json=req).status_code == 422
+
+
+def test_nonce_qr_endpoint_roundtrip(client, chain):
+    import cv2
+    import numpy as np
+    tid = chain.funded_trade()
+    r = client.get(f"/trade/{tid}/nonce-qr.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+    nonce = Web3.to_hex(chain.trade(tid)[6])
+    assert ec.read_qr_texts(img)[0] == ec.qr_payload(nonce)
+    assert ec.check_nonce(img, nonce).method == "qr"
+    assert client.get("/trade/99999/nonce-qr.png").status_code == 404
