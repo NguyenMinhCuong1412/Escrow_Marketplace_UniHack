@@ -38,8 +38,8 @@ Bản `43113.json` trên `main` (commit `798d194`) là sản phẩm của một 
 | Giao dịch | Tx hash | Gas |
 |---|---|---|
 | CREATE CollectibleToken | `0x5a5e6da6ca11155899c42311b034229b5fa690397f18eef3c1c16daed08deed4` | 752,184 |
-| CREATE Escrow | `0x8e5bdced40af3dd4301b8bcc54a2e25902e88625829adfb801c7bc4c4a0a2e05` | 2,194,783 |
-| `token.setEscrow(escrow)` | `0xf888bd481a99d1807aebde81708a0461b94bef60a6ddc1cf0ae33f08cdde760a` | 47,398 |
+| CREATE Escrow | `0xf888bd481a99d1807aebde81708a0461b94bef60a6ddc1cf0ae33f08cdde760a` | 2,194,783 |
+| `token.setEscrow(escrow)` | `0x8e5bdced40af3dd4301b8bcc54a2e25902e88625829adfb801c7bc4c4a0a2e05` | 47,398 |
 
 Cả 3 receipt `status = 1`. Tổng phí ≈ 0.0000000005 AVAX (số dư Deployer sau deploy: 0.1499999995 AVAX).
 
