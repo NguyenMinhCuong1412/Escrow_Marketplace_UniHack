@@ -14,9 +14,11 @@ import { AvaxAmount } from '@/components/AvaxAmount';
 import { NonceCard } from '@/components/NonceCard';
 import { CountdownTimer } from '@/components/CountdownTimer';
 import { TradeTimeline } from '@/components/TradeTimeline';
-import { EvidencePlaceholder } from '@/components/EvidencePlaceholder';
+import { EvidenceUploader } from '@/components/EvidenceUploader';
+import { VerifyProgress } from '@/components/VerifyProgress';
 import { formatDateTime, formatAvax } from '@/lib/format';
 import { getReadableError } from '@/lib/errors';
+import { getStoredListingUri, ipfsToGatewayUrl } from '@/lib/ipfs';
 import {
   ShieldCheck,
   Coins,
@@ -31,6 +33,8 @@ import {
   Loader2,
   Clock,
   Sparkles,
+  FileSearch,
+  ExternalLink,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -257,10 +261,50 @@ export default function TradeDetailPage() {
         <div className="lg:col-span-7 space-y-6">
           {/* Item Description Card */}
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <FileText className="w-4 h-4 text-indigo-400" />
-              Thông tin thỏa thuận
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <FileText className="w-4 h-4 text-indigo-400" />
+                Thông tin thỏa thuận
+              </h3>
+              {(trade.state >= 2 || !isZeroHash(trade.reportHash)) && (
+                <Link
+                  href={`/trade/${trade.id.toString()}/report`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/20 text-xs font-semibold border border-indigo-500/30 transition-all"
+                >
+                  <FileSearch className="w-3.5 h-3.5" />
+                  Xem Explainable Report
+                </Link>
+              )}
+            </div>
+
+            {/* Listing Image Preview if available */}
+            {(() => {
+              const listingUri = (meta as any)?.listingUri || getStoredListingUri(trade.id);
+              if (!listingUri) return null;
+              return (
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 flex items-center gap-4">
+                  <img
+                    src={ipfsToGatewayUrl(listingUri)}
+                    alt="Listing image"
+                    className="w-20 h-20 object-cover rounded-lg border border-slate-800 bg-black flex-shrink-0"
+                  />
+                  <div className="min-w-0 text-xs space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                      Ảnh niêm yết gốc (IPFS)
+                    </span>
+                    <p className="font-mono text-slate-400 truncate text-[11px]">{listingUri}</p>
+                    <a
+                      href={ipfsToGatewayUrl(listingUri)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1 text-[11px]"
+                    >
+                      Mở ảnh đầy đủ <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                </div>
+              );
+            })()}
 
             {meta?.description && (
               <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80">
@@ -369,12 +413,24 @@ export default function TradeDetailPage() {
             </div>
           </div>
 
-          {/* Evidence Submission Placeholder (Phase 4C 준비) */}
+          {/* AC-03 & AC-04: Evidence Submission & AI Verify Flow (Phase 4C) */}
           {trade.state === 1 && (
-            <EvidencePlaceholder
-              role={role}
-              hasSubmitted={role === 'seller' ? sellerHasEvidence : buyerHasEvidence}
-            />
+            <div className="space-y-6">
+              <EvidenceUploader
+                tradeId={trade.id}
+                role={role}
+                hasSubmitted={role === 'seller' ? sellerHasEvidence : buyerHasEvidence}
+                isEvidenceExpired={isEvidenceExpired}
+                isActionDisabled={isActionDisabled}
+                onSuccess={() => refetch()}
+              />
+
+              <VerifyProgress
+                tradeId={trade.id}
+                canVerify={sellerHasEvidence && buyerHasEvidence}
+                onSuccess={() => refetch()}
+              />
+            </div>
           )}
         </div>
 
@@ -526,6 +582,13 @@ export default function TradeDetailPage() {
                     <p className="text-[11px] leading-relaxed">
                       Điểm rủi ro AI: <strong>{trade.riskScore}/100</strong>. Phát hiện dấu hiệu bất thường (lệch vật phẩm hoặc sai mã nonce). Cần mở tranh chấp để trọng tài can thiệp.
                     </p>
+                    <Link
+                      href={`/trade/${trade.id.toString()}/report`}
+                      className="w-full py-2.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-semibold text-xs border border-amber-500/30 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSearch className="w-4 h-4" />
+                      <span>Xem Báo Cáo Giải Trình AI (Explainable Report)</span>
+                    </Link>
                     <button
                       type="button"
                       onClick={handleFileComplaint}
@@ -544,6 +607,14 @@ export default function TradeDetailPage() {
                     <p className="text-[11px] leading-relaxed">
                       Mọi bằng chứng và mã nonce đều khớp với thông tin niêm yết. Thời gian mở khiếu nại đang đếm ngược.
                     </p>
+
+                    <Link
+                      href={`/trade/${trade.id.toString()}/report`}
+                      className="w-full py-2 px-3 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-semibold text-xs border border-indigo-500/30 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <FileSearch className="w-4 h-4" />
+                      <span>Xem Báo Cáo Giải Trình AI (Explainable Report)</span>
+                    </Link>
 
                     {/* Complaint button during dispute window */}
                     {!isDisputeExpired && (
