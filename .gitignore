@@ -1,10 +1,31 @@
+# Environment & secrets
 .env
 *.env.local
+
+# Python
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Backend data
 backend/data/
+
+# Foundry build artifacts
 contracts/out/
 contracts/cache/
-contracts/broadcast/*/31337/
+contracts/broadcast/
+
+# Local-only deployment (anvil)
 contracts/deployments/31337.json
+
+# Node
+node_modules/
+.next/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

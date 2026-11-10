@@ -1,0 +1,11 @@
+{
+  "agent": "0x1bEF90580559cd3B80AD4c4379E452976F21FAA5",
+  "attestWindow": 600,
+  "chainId": 43113,
+  "deployBlock": 60839658,
+  "disputeWindow": 90,
+  "escrow": "0xdfB1EaFe0E634bc95b780E95303696fE6139f0f1",
+  "evidenceWindow": 600,
+  "owner": "0xa01b5FFf7E370c22a8CFc70bDaf1496d1052fC48",
+  "token": "0xeaA8bb0277ac1148ba9864Cd41C02fb8A4ab0A9D"
+}
