@@ -46,7 +46,7 @@ project-root/
 │   ├── VAI3_DYNAMIC_DEPOSIT_SPEC.md   # Stretch goal: dynamic deposit
 │   ├── L1_MODULE_SPEC.md              # Stretch goal: custom L1 reputation
 │   └── SLIDE_AND_VIDEO_SCRIPT.md      # Outline slide + kịch bản video
-├── Escrow_Marketplace_AI_Operating_Kit/  # Agent Operating Kit (management layer)
+├── .agents/                  # Agent rules & skills
 │   ├── docs/context/                  # Nguồn sự thật dự án (file này)
 │   ├── docs/agent-ops/                # Prompts, templates, reports
 │   ├── .agents/rules/                 # Coding rules theo domain
