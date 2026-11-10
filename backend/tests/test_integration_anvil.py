@@ -103,23 +103,31 @@ def chain(anvil):
     return Chain(anvil)
 
 
-@pytest.fixture(scope="module")
-def client(chain, anvil, tmp_path_factory):
-    settings = svc.Settings(
-        rpc_url=anvil, agent_private_key=AGENT, escrow_address=chain.escrow.address,
-        escrow_abi_path=OUT / "Escrow.sol" / "Escrow.json",
-        data_dir=tmp_path_factory.mktemp("backend_data"),
+def _settings(anvil, chain, file_server, data_dir, agent_key=AGENT):
+    """file_server đóng vai IPFS gateway: ipfs://<tên file> → http://127.0.0.1:<port>/<tên file>.
+    Gateway chạy trên loopback nên phải bật allow_local_hosts (chỉ cho test)."""
+    return svc.Settings(
+        rpc_url=anvil, agent_private_key=agent_key, escrow_address=chain.escrow.address,
+        escrow_abi_path=OUT / "Escrow.sol" / "Escrow.json", data_dir=data_dir,
+        ipfs_gateway=file_server[1] + "/", allow_local_hosts=True,
     )
-    return TestClient(svc.create_app(settings))
+
+
+@pytest.fixture
+def client(chain, anvil, file_server, tmp_path):
+    # App mới cho mỗi test: rate limiter (10 req/phút/IP) nằm trong app, dùng chung
+    # một app cho cả module sẽ dính 429 giữa chừng.
+    return TestClient(svc.create_app(_settings(anvil, chain, file_server, tmp_path)))
 
 
 def _publish(file_server, name, img=None, frames=None):
-    root, base = file_server
+    """Ghi file vào thư mục của gateway giả, trả URI ipfs:// như frontend gửi thật."""
+    root, _ = file_server
     if frames is not None:
         path = synth.write_video(frames, str(root / f"{name}.mp4"))
     else:
         path = synth.write_image(img, str(root / f"{name}.jpg"))
-    return f"{base}/{path.replace(chr(92), '/').split('/')[-1]}"
+    return f"ipfs://{path.replace(chr(92), '/').split('/')[-1]}"
 
 
 def _photo(item, seed, short, nonce_hex, **kw):
@@ -135,7 +143,7 @@ def _photo(item, seed, short, nonce_hex, **kw):
 
 def _evidence(chain, file_server, tid, *, seller_nonce=True, buyer_nonce=True, item_seed=11,
               buyer_item_seed=None, buyer_video=False, seller_img=None):
-    """Sinh ảnh với nonce thật của trade, publish qua HTTP, neo keccak(url) on-chain."""
+    """Sinh ảnh với nonce thật của trade, publish qua gateway giả, neo keccak(url) on-chain."""
     nonce = Web3.to_hex(chain.trade(tid)[6])
     short = ec.short_nonce(nonce)
     item = synth.make_item(item_seed)
@@ -288,38 +296,36 @@ def test_dry_run_does_not_attest(client, chain, file_server):
 def test_not_funded_conflict(client, chain):
     chain.tx("seller", chain.escrow.functions.createTrade(chain.acct["buyer"].address, ITEM_VALUE))
     tid = chain.escrow.functions.nextTradeId().call() - 1
-    r = client.post("/verify-evidence", json={"trade_id": tid, "listing_image_url": "http://x/a",
-                                              "seller_evidence_url": "http://x/b", "buyer_evidence_url": "http://x/c"})
+    r = client.post("/verify-evidence", json={"trade_id": tid, "listing_image_url": "ipfs://a",
+                                              "seller_evidence_url": "ipfs://b", "buyer_evidence_url": "ipfs://c"})
     assert r.status_code == 409 and "Created" in r.json()["detail"]
 
 
 def test_missing_evidence_conflict(client, chain):
     tid = chain.funded_trade()
-    r = client.post("/verify-evidence", json={"trade_id": tid, "listing_image_url": "http://x/a",
-                                              "seller_evidence_url": "http://x/b", "buyer_evidence_url": "http://x/c"})
+    r = client.post("/verify-evidence", json={"trade_id": tid, "listing_image_url": "ipfs://a",
+                                              "seller_evidence_url": "ipfs://b", "buyer_evidence_url": "ipfs://c"})
     assert r.status_code == 409 and "bằng chứng" in r.json()["detail"]
 
 
 def test_unknown_trade_404(client):
-    r = client.post("/verify-evidence", json={"trade_id": 99999, "listing_image_url": "http://x/a",
-                                              "seller_evidence_url": "http://x/b", "buyer_evidence_url": "http://x/c"})
+    r = client.post("/verify-evidence", json={"trade_id": 99999, "listing_image_url": "ipfs://a",
+                                              "seller_evidence_url": "ipfs://b", "buyer_evidence_url": "ipfs://c"})
     assert r.status_code == 404
 
 
 def test_broken_image_422(client, chain, file_server):
-    root, base = file_server
+    root, _ = file_server
     tid = chain.funded_trade()
     (root / f"t{tid}_broken.jpg").write_bytes(b"definitely not a jpeg")
     req = _evidence(chain, file_server, tid)
     # listing không neo on-chain → thay listing bằng file hỏng
-    r = client.post("/verify-evidence", json=dict(req, listing_image_url=f"{base}/t{tid}_broken.jpg"))
+    r = client.post("/verify-evidence", json=dict(req, listing_image_url=f"ipfs://t{tid}_broken.jpg"))
     assert r.status_code == 422
 
 
 def test_wrong_agent_key_gives_502(chain, anvil, file_server, tmp_path):
-    settings = svc.Settings(rpc_url=anvil, agent_private_key=STRANGER, escrow_address=chain.escrow.address,
-                            escrow_abi_path=OUT / "Escrow.sol" / "Escrow.json", data_dir=tmp_path)
-    c = TestClient(svc.create_app(settings))
+    c = TestClient(svc.create_app(_settings(anvil, chain, file_server, tmp_path, agent_key=STRANGER)))
     assert c.get("/health").json()["agent_matches_contract"] is False
     tid = chain.funded_trade()
     req = _evidence(chain, file_server, tid)
