@@ -1,7 +1,7 @@
 # Current Project Status
 
-> Last updated: 2026-11-10  
-> Status: `Phase 3A + 4A + 4B + 4C DONE — chuẩn bị Phase 5 (Deploy Fuji)`
+> Last updated: 2026-11-11  
+> Status: `Phase 5 (Deploy Fuji) DONE, chờ QA — chuẩn bị Phase 6 (E2E trên Fuji)`
 
 ## High-level
 
@@ -14,7 +14,7 @@
 - [x] Phase 4B (Core pages) completed — ESC-030.
 - [x] Phase 4C (Frontend integration — IPFS, AI verify, dispute) completed — ESC-040.
 - [x] All branches merged to `main`. Docs committed.
-- [ ] Phase 5 — Deploy contracts to Fuji testnet (ESC-050).
+- [x] Phase 5 — Deploy contracts to Fuji testnet (ESC-050) — deployed + verified 11/11, chờ QA review.
 - [ ] Phase 6 — E2E integration test on Fuji (ESC-060).
 - [ ] Phase 7 — Slide pitch + video demo + final submission (ESC-070).
 - [ ] Nộp bài trước 21/11/2026 23:59.
@@ -27,7 +27,7 @@
 | AI Pipeline | `ai-pipeline/` | ✅ AUDITED + FIXED | 59 unit tests ALL PASS | Quốc |
 | Backend | `backend/` | ✅ AUDITED + FIXED (Phase 3A hardened) | 23 unit + 14 integration tests ALL PASS | Quốc |
 | Frontend | `frontend/` | ✅ CODED + INTEGRATED (Phase 4A→4C) | Manual testing done | Quốc |
-| Deploy Fuji | — | ❌ NOT DONE | Chờ ví + AVAX faucet | Quốc |
+| Deploy Fuji | `contracts/deployments/43113.json` | ✅ DEPLOYED + VERIFIED (Escrow `0x1F048Bc735CF0277FeFd3fAaA3dA7d8d2c4cCbCf`) | `/health` OK, xem `ESC-050-report.md` | Quốc |
 | Slide + Video | `docs/specs/` | Script drafted | — | Quốc |
 
 ## Test commands
@@ -42,8 +42,8 @@ cd contracts && forge test
 
 ## Blockers hiện tại
 
-- Cần tạo ví deployer + ví agent, xin AVAX Fuji faucet → rồi dispatch ESC-050
-- ESC-060 (E2E test) blocked by ESC-050
+- ESC-050 chờ QA review + merge `phase/5-deploy-fuji`
+- ESC-060 (E2E test) cần `PINATA_JWT` thật trong `frontend/.env.local`
 - ESC-070 (submission) blocked by ESC-060
 
 ## Timeline

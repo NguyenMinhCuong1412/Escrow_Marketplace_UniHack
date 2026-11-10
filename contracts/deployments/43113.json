@@ -1,11 +1,11 @@
 {
-  "agent": "0x1bEF90580559cd3B80AD4c4379E452976F21FAA5",
+  "agent": "0x10582eDa05f63ae2D132b9436B18bc76a72894E2",
   "attestWindow": 600,
   "chainId": 43113,
-  "deployBlock": 60839658,
+  "deployBlock": 60846507,
   "disputeWindow": 90,
-  "escrow": "0xdfB1EaFe0E634bc95b780E95303696fE6139f0f1",
+  "escrow": "0x1F048Bc735CF0277FeFd3fAaA3dA7d8d2c4cCbCf",
   "evidenceWindow": 600,
-  "owner": "0xa01b5FFf7E370c22a8CFc70bDaf1496d1052fC48",
-  "token": "0xeaA8bb0277ac1148ba9864Cd41C02fb8A4ab0A9D"
+  "owner": "0x10dFa7a8A861a4A461A4186705F2c15EB8FA0a4c",
+  "token": "0x24E0E84b3fA7C71E87dc3ee4525B9E8F1Fb7a3Fb"
 }
