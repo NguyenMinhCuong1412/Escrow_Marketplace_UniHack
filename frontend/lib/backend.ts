@@ -8,12 +8,14 @@ export interface VerifyReportDetails {
     found: boolean;
     best_candidate?: string;
     edit_distance?: number;
+    method?: 'qr' | 'ocr' | null;
   };
   nonce_buyer?: {
     expected: string;
     found: boolean;
     best_candidate?: string;
     edit_distance?: number;
+    method?: 'qr' | 'ocr' | null;
   };
   inliers_listing_seller?: number;
   inliers_listing_buyer?: number;

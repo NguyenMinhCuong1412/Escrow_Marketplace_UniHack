@@ -465,7 +465,7 @@ export default function TradeDetailPage() {
           )}
 
           {/* AC-04: NonceCard (hiện khi state >= 1) */}
-          <NonceCard nonce={trade.nonce} state={trade.state} />
+          <NonceCard nonce={trade.nonce} state={trade.state} tradeId={trade.id} />
 
           {/* AC-03 & AC-09: Action Panel */}
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5 shadow-xl">
