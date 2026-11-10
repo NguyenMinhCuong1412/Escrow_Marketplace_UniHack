@@ -12,6 +12,7 @@ import {
   ipfsToGatewayUrl,
 } from '@/lib/ipfs';
 import { getReadableError } from '@/lib/errors';
+import { registerUri } from '@/lib/backend';
 import {
   UploadCloud,
   FileCheck,
@@ -119,6 +120,15 @@ export const EvidenceUploader: React.FC<EvidenceUploaderProps> = ({
 
       // 4. Lưu lại URI vào localStorage
       setStoredEvidenceUri(tradeId, role, uri);
+
+      // 5. Báo URI cho AI Agent tự động. Lỗi ở bước này không chặn luồng:
+      //    bằng chứng đã neo on-chain, vẫn còn phương án chạy xác thực thủ công.
+      try {
+        await registerUri({ trade_id: Number(tradeId), role, uri });
+      } catch (regErr) {
+        console.warn('Register evidence URI failed:', regErr);
+        toast.warning('Chưa báo được đường dẫn cho AI Agent — có thể chạy xác thực thủ công.', { duration: 6000 });
+      }
 
       toast.success('Đã nộp bằng chứng on-chain thành công!', { id: toastId });
       removeFile();

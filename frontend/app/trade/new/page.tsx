@@ -2,13 +2,14 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAccount, useWriteContract, usePublicClient } from 'wagmi';
+import { useAccount, useWriteContract, usePublicClient, useSignMessage } from 'wagmi';
 import { isAddress, parseEther } from 'viem';
 import { escrowAddress, escrowAbi, chainId } from '@/lib/contracts';
 import { targetChain } from '@/lib/wagmi';
 import { useReputation } from '@/hooks/useReputation';
 import { getReadableError } from '@/lib/errors';
 import { uploadToIpfs, validateEvidenceFile, setStoredListingUri } from '@/lib/ipfs';
+import { listingMessage, registerUri } from '@/lib/backend';
 import {
   ShieldCheck,
   Coins,
@@ -29,6 +30,7 @@ export default function CreateTradePage() {
   const { address, isConnected, chain } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
+  const { signMessageAsync } = useSignMessage();
 
   const [buyerAddress, setBuyerAddress] = useState('');
   const [itemValue, setItemValue] = useState('');
@@ -184,6 +186,19 @@ export default function CreateTradePage() {
         setStoredListingUri(createdTradeId, listingUri);
       } catch {
         // ignore storage errors
+      }
+
+      // Người bán ký xác nhận ảnh niêm yết (không tốn gas) → AI Agent tự động chỉ tin ảnh có chữ ký này.
+      // Lỗi/từ chối ký không chặn luồng: vẫn còn phương án chạy xác thực thủ công.
+      try {
+        toast.loading('Ký xác nhận ảnh niêm yết cho AI Agent (không tốn phí)...', { id: toastId });
+        const signature = await signMessageAsync({
+          message: listingMessage(chainId, escrowAddress, createdTradeId, listingUri),
+        });
+        await registerUri({ trade_id: Number(createdTradeId), role: 'listing', uri: listingUri, signature });
+      } catch (regErr) {
+        console.warn('Register listing URI failed:', regErr);
+        toast.warning('Chưa đăng ký được ảnh niêm yết với AI Agent — vẫn có thể xác thực thủ công.', { duration: 6000 });
       }
 
       toast.success(`Đã tạo giao dịch #${createdTradeId} thành công!`, { id: toastId });

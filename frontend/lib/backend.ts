@@ -72,6 +72,8 @@ export interface HealthResponse {
   agent?: string;
   agent_balance_wei?: string;
   agent_matches_contract?: boolean;
+  agent_auto?: boolean;
+  agent_running?: boolean;
   error?: string;
 }
 
@@ -138,4 +140,90 @@ export function verifyReportOnChain(
   } catch {
     return { matches: false, computedHash: '', expectedHash: reportHashOnChain || '' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// AI Agent tự động (DEC-005 phương án A)
+// ---------------------------------------------------------------------------
+
+export type UriRole = 'listing' | 'seller' | 'buyer';
+
+export type AgentPhase =
+  | 'waiting_deposit'
+  | 'waiting_evidence'
+  | 'waiting_uris'
+  | 'queued'
+  | 'analyzing'
+  | 'retrying'
+  | 'failed'
+  | 'attested'
+  | 'cancelled';
+
+export interface AgentStatus {
+  enabled: boolean;
+  trade_id: number;
+  trade_state: string;
+  phase: AgentPhase;
+  detail: string;
+  attempts: number;
+  max_attempts: number;
+  missing_uris: UriRole[];
+  updated_at: number | null;
+}
+
+/**
+ * Thông điệp Người bán ký (personal_sign, không tốn gas) để xác nhận ảnh niêm yết.
+ * PHẢI khớp từng ký tự với backend/auto_agent.py::listing_message.
+ */
+export function listingMessage(chainId: number, escrow: string, tradeId: string | bigint | number, uri: string): string {
+  return [
+    'TrustPact Escrow - xac nhan anh niem yet',
+    `chain: ${chainId}`,
+    `escrow: ${escrow.toLowerCase()}`,
+    `trade: ${tradeId.toString()}`,
+    `uri: ${uri}`,
+  ].join('\n');
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Báo URI cho AI Agent qua proxy /api/uris. Thử lại vài lần khi backend trả 409/502/503:
+ * RPC của backend có thể thấy giao dịch submitEvidence chậm hơn ví vài giây.
+ */
+export async function registerUri(params: {
+  trade_id: number;
+  role: UriRole;
+  uri: string;
+  signature?: string;
+}): Promise<void> {
+  let lastError = 'Không đăng ký được URI với AI Agent';
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(2000);
+    const res = await fetch('/api/uris', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    lastError = data?.detail || `HTTP ${res.status}`;
+    if (![409, 502, 503].includes(res.status)) break;
+  }
+  throw new Error(lastError);
+}
+
+/** Trạng thái AI Agent đối với một giao dịch (GET /agent/status/{id}). */
+export async function getAgentStatus(tradeId: number | bigint): Promise<AgentStatus> {
+  const res = await fetch(`${backendBaseUrl()}/agent/status/${tradeId.toString()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`agent status HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Các URI đã đăng ký ở backend — dùng khi trình duyệt này không có sẵn trong localStorage. */
+export async function getRegisteredUris(tradeId: number | bigint): Promise<Partial<Record<UriRole, string>>> {
+  const res = await fetch(`${backendBaseUrl()}/trade/${tradeId.toString()}/uris`, { cache: 'no-store' });
+  if (!res.ok) return {};
+  const data = await res.json().catch(() => ({}));
+  return data?.uris || {};
 }

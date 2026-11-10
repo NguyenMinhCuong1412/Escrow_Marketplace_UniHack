@@ -16,7 +16,7 @@ import {
   Lock,
   Camera,
   Cpu,
-  ArrowRight,
+
   Layers,
   Sparkles,
 } from 'lucide-react';
@@ -53,13 +53,6 @@ export default function HomePage() {
             <PlusCircle className="w-4 h-4" />
             Tạo giao dịch
           </Link>
-          <a
-            href="#how-it-works"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium border border-slate-700 text-sm transition-all"
-          >
-            Tìm hiểu cách hoạt động
-            <ArrowRight className="w-4 h-4" />
-          </a>
         </div>
       </section>
 

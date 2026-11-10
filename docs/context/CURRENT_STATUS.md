@@ -15,7 +15,8 @@
 - [x] Phase 4C (Frontend integration — IPFS, AI verify, dispute) completed — ESC-040.
 - [x] All branches merged to `main`. Docs committed.
 - [x] Phase 5 — Deploy contracts to Fuji testnet (ESC-050) — deployed + verified 11/11, chờ QA review.
-- [ ] Phase 6 — E2E integration test on Fuji (ESC-060).
+- [x] AI Agent tự động (DEC-005 phương án A) — backend tự verify + attest, đã chạy thật trên Fuji 11/11 (branch `phase/4d-auto-agent`).
+- [ ] Phase 6 — E2E integration test on Fuji (ESC-060) — phần tự động PASS 11/11, còn phần test tay trên giao diện.
 - [ ] Phase 7 — Slide pitch + video demo + final submission (ESC-070).
 - [ ] Nộp bài trước 21/11/2026 23:59.
 

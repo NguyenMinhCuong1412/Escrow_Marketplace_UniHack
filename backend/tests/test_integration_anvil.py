@@ -331,3 +331,136 @@ def test_wrong_agent_key_gives_502(chain, anvil, file_server, tmp_path):
     req = _evidence(chain, file_server, tid)
     r = c.post("/verify-evidence", json=dict(req, include_visual=False))
     assert r.status_code == 502 and "not agent" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Agent tự động (DEC-005 phương án A): sổ URI + vòng quét tự attest
+# ---------------------------------------------------------------------------
+
+from eth_account import Account  # noqa: E402
+from eth_account.messages import encode_defunct  # noqa: E402
+
+from auto_agent import listing_message  # noqa: E402
+
+
+def _sign_listing(chain, key, tid, uri):
+    msg = listing_message(31337, chain.escrow.address, tid, uri)
+    return Account.sign_message(encode_defunct(text=msg), private_key=key).signature.hex()
+
+
+def _register_all(c, chain, tid, req):
+    for role in ("seller", "buyer"):
+        r = c.post(f"/trade/{tid}/uris", json={"role": role, "uri": req[f"{role}_evidence_url"]})
+        assert r.status_code == 200, r.text
+    r = c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": req["listing_image_url"],
+                                          "signature": _sign_listing(chain, SELLER, tid, req["listing_image_url"])})
+    assert r.status_code == 200, r.text
+
+
+def _agent_app(chain, anvil, file_server, data_dir):
+    app = svc.create_app(_settings(anvil, chain, file_server, data_dir))
+    return app, TestClient(app)
+
+
+def test_auto_agent_attests_without_manual_call(chain, anvil, file_server, tmp_path):
+    app, c = _agent_app(chain, anvil, file_server, tmp_path)
+    tid = chain.funded_trade()
+    assert c.get(f"/agent/status/{tid}").json()["phase"] == "waiting_evidence"
+
+    req = _evidence(chain, file_server, tid)
+    st = c.get(f"/agent/status/{tid}").json()
+    assert st["phase"] == "waiting_uris" and set(st["missing_uris"]) == {"listing", "seller", "buyer"}
+
+    app.state.agent.tick()  # chưa có URI → agent không làm gì
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
+
+    _register_all(c, chain, tid, req)
+    assert c.get(f"/agent/status/{tid}").json()["phase"] == "queued"
+
+    app.state.agent.tick()  # KHÔNG ai gọi /verify-evidence
+    t = chain.trade(tid)
+    assert t[15] == TradeState.Attested and t[11] is False
+    saved = c.get(f"/report/{tid}").json()
+    assert Web3.to_hex(t[9]) == saved["report_hash"]
+    assert c.get(f"/agent/status/{tid}").json()["phase"] == "attested"
+
+    app.state.agent.tick()  # nhịp sau không attest lại, không lỗi
+    assert app.state.agent.status[tid]["attempts"] == 1
+
+
+def test_auto_agent_flags_fraud(chain, anvil, file_server, tmp_path):
+    app, c = _agent_app(chain, anvil, file_server, tmp_path)
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, buyer_nonce=False, item_seed=51)
+    _register_all(c, chain, tid, req)
+    app.state.agent.tick()
+    t = chain.trade(tid)
+    assert t[15] == TradeState.Attested and t[11] is True
+
+
+def test_auto_agent_resumes_after_restart(chain, anvil, file_server, tmp_path):
+    _, c1 = _agent_app(chain, anvil, file_server, tmp_path)
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, item_seed=61)
+    _register_all(c1, chain, tid, req)
+
+    app2, _ = _agent_app(chain, anvil, file_server, tmp_path)  # backend khởi động lại, cùng data_dir
+    app2.state.agent.tick()
+    assert chain.trade(tid)[15] == TradeState.Attested
+
+
+def test_register_uri_validation(chain, anvil, file_server, tmp_path):
+    _, c = _agent_app(chain, anvil, file_server, tmp_path)
+    tid = chain.funded_trade()
+    # bằng chứng chưa neo on-chain
+    r = c.post(f"/trade/{tid}/uris", json={"role": "seller", "uri": "ipfs://whatever"})
+    assert r.status_code == 409
+    req = _evidence(chain, file_server, tid, item_seed=71)
+    listing = req["listing_image_url"]
+    # URI không khớp hash on-chain
+    r = c.post(f"/trade/{tid}/uris", json={"role": "seller", "uri": req["buyer_evidence_url"]})
+    assert r.status_code == 422 and "sellerEvidenceHash" in r.json()["detail"]
+    # không phải ipfs://
+    assert c.post(f"/trade/{tid}/uris", json={"role": "buyer", "uri": "http://x/a.jpg"}).status_code == 422
+    # ảnh niêm yết: thiếu chữ ký / chữ ký của người khác / chữ ký cho URI khác
+    assert c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": listing}).status_code == 422
+    r = c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": listing,
+                                          "signature": _sign_listing(chain, BUYER, tid, listing)})
+    assert r.status_code == 403
+    r = c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": listing,
+                                          "signature": _sign_listing(chain, SELLER, tid, "ipfs://other")})
+    assert r.status_code == 403
+    # hợp lệ, gửi lại y hệt vẫn OK, đổi sang URI khác thì bị từ chối
+    sig = _sign_listing(chain, SELLER, tid, listing)
+    assert c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": listing, "signature": sig}).status_code == 200
+    assert c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": listing, "signature": sig}).status_code == 200
+    other = req["seller_evidence_url"]
+    r = c.post(f"/trade/{tid}/uris", json={"role": "listing", "uri": other,
+                                          "signature": _sign_listing(chain, SELLER, tid, other)})
+    assert r.status_code == 409
+    assert c.get(f"/trade/{tid}/uris").json()["uris"] == {"listing": listing}
+    assert c.post("/trade/99999/uris", json={"role": "buyer", "uri": "ipfs://a-b-c"}).status_code == 404
+
+
+def test_auto_agent_retries_then_gives_up(chain, anvil, file_server, tmp_path, monkeypatch):
+    app, c = _agent_app(chain, anvil, file_server, tmp_path)
+    agent = app.state.agent
+    monkeypatch.setattr(agent, "RETRY_DELAY", 0.0)
+    root, _ = file_server
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, item_seed=81)
+    (root / f"t{tid}_broken.jpg").write_bytes(b"definitely not a jpeg")
+    req["listing_image_url"] = f"ipfs://t{tid}_broken.jpg"
+    _register_all(c, chain, tid, req)
+
+    agent.tick()
+    st = c.get(f"/agent/status/{tid}").json()
+    assert st["phase"] == "retrying" and st["attempts"] == 1 and st["detail"]
+    for _ in range(agent.MAX_ATTEMPTS - 1):
+        agent.tick()
+    assert c.get(f"/agent/status/{tid}").json()["phase"] == "failed"
+    agent.tick()  # đã bỏ cuộc → không thử thêm
+    assert agent.status[tid]["attempts"] == agent.MAX_ATTEMPTS
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
+    # nút thủ công vẫn dùng được như phương án dự phòng (ở đây vẫn 422 vì ảnh hỏng)
+    assert c.post("/verify-evidence", json=req).status_code == 422
