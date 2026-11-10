@@ -1,161 +1,97 @@
-# Phase 5 Pre-flight Checklist — Việc Project Owner phải làm trước khi dispatch ESC-050
+# Phase 5 Pre-flight — Trạng thái & việc còn lại
 
-**Người thực hiện:** Hứa Kiến Quốc (Project Owner) — KHÔNG giao cho agent  
-**Ngày lập:** 2026-11-10 · **Deadline nộp bài:** 21/11/2026 23:59 (còn 11 ngày)  
-**Trạng thái repo khi quét:** branch `main` @ `1874c08`
-
----
-
-## ⚠️ Phát hiện quan trọng: toàn bộ Phase 3+4 CHƯA merge vào `main`
-
-Đây là blocker lớn nhất, phải xử lý trước mọi thứ khác.
-
-| Branch | Commit | Nội dung | Đã merge vào main? |
-|---|---|---|---|
-| `main` | `1874c08` | checkpoint: pre-phase-3 | — |
-| `phase/3a-backend-hardening` | `b238a41` | SSRF + API key + rate limit | ❌ CHƯA |
-| `phase/4a-frontend-scaffold` | `1a4dc3a` | Frontend scaffold (ESC-020) | ❌ CHƯA |
-| `phase/4b-core-pages` | `851a707` | Core pages (ESC-030) | ❌ CHƯA |
-| `phase/4c-frontend-integration` | `a1ad5bc` | Integration (ESC-040) | ❌ CHƯA |
-
-**Tin tốt:** 4 branch này là một chuỗi tuyến tính — `phase/4c-frontend-integration` đã **chứa sẵn** cả 3A, 4A, 4B. Chỉ cần merge 1 branch duy nhất là có đủ stack.
-
-**Đã verify:** `main` là ancestor của `4c` → merge sẽ là **fast-forward**, không conflict.
-
-### Hệ quả nếu không merge trước khi deploy
-
-- Trên `main` hiện tại, thư mục `frontend/` **rỗng hoàn toàn**.
-- Agent ESC-050 sẽ tạo branch `phase/5-deploy-fuji` từ `main` → deploy xong ghi `deployments/43113.json` nhưng không có frontend để demo.
-- Repo nộp cho BTC (link public) sẽ chỉ thấy scaffold, không thấy sản phẩm.
+**Cập nhật:** 2026-11-10 · **Deadline nộp bài:** 21/11/2026 23:59 (còn 11 ngày)  
+**`main` hiện tại:** `9101c61` — đã có đủ Phase 3A + 4A + 4B + 4C
 
 ---
 
-## ⚠️ Phát hiện 2: 32 file tài liệu đang KHÔNG được git track
+## ✅ Phần đã hoàn tất (Cowork thực hiện)
 
-Toàn bộ specs, context docs, task specs và QA reports chỉ nằm trên ổ đĩa local — chưa commit, chưa push. Nếu máy hỏng là mất sạch.
+| Bước | Kết quả |
+|---|---|
+| B1 | Xoá 3 file `ESC-0x0-report.md` untracked trùng lặp |
+| B2 | **Merge `phase/4c-frontend-integration` → `main`** (fast-forward, mang cả 3A+4A+4B+4C) |
+| B3 | Commit 63 file docs — commit `9101c61`, verify không lẫn `.env` |
+| B4 | `git worktree prune` + xoá 4 branch alias trùng commit |
+| B7a | Tạo khung `contracts/.env`, `backend/.env`, `frontend/.env.local` |
 
-Các file untracked gồm:
+**Verify đã chạy:**
 
-- `docs/context/` — 9 files (DECISION_LOG, PROJECT_BRIEF, TECH_STACK, CURRENT_STATUS…)
-- `docs/specs/` — 4 files (FRONTEND_SPEC, L1_MODULE_SPEC, VAI3_DYNAMIC_DEPOSIT_SPEC, SLIDE_AND_VIDEO_SCRIPT)
-- `docs/agent-ops/tasks/` — 6 files (ESC-020 → ESC-070)
-- `docs/agent-ops/reports/` — các QA report
-- `docs/agent-ops/` — MASTER_DISPATCH, QA_REVIEW_PROMPT, TASK_TEMPLATE, RELEASE_GATE_PROMPT, TASK_DISPATCH_PROMPT
-- `.agents/AGENTS.md`
+```
+✅ frontend/ đầy đủ trên main (page, admin, api/pin)
+✅ backend có X-API-Key auth (Phase 3A)
+✅ 32 file docs/ đã được git track
+✅ Không file .env nào bị track (chỉ .env.example)
+✅ ATTEST_API_KEY sinh tự động, khớp giữa backend ↔ frontend
+```
 
-**Code thì an toàn** — cả 4 phase branch đều đã push lên `origin`. Chỉ có docs là chưa.
+### Phát sinh đã xử lý
+
+**810 file hiện "modified" do line-ending CRLF.** Đã phân loại: 758 file chỉ khác CRLF (đã khôi phục), 1 file thay đổi thật (`CLAUDE.md`, giữ lại). Đây là vấn đề Windows checkout — xem mục "Dọn dẹp tuỳ chọn" cuối file để chặn tái diễn.
+
+**README.md:** bản trên branch `4c` (78 dòng, có sơ đồ kiến trúc + hướng dẫn chạy local) đầy đủ hơn bản local (28 dòng stub). Đã lấy bản branch. Bản local backup ở `README.local-backup.md` — xem lại rồi xoá.
 
 ---
 
-## BƯỚC 1 — Dọn 3 file trùng (bắt buộc làm trước khi merge)
+## 🔴 Việc bạn phải tự làm
 
-3 file report dưới đây vừa tồn tại dưới dạng **untracked local**, vừa đã nằm trên branch `4c`. Nội dung **giống hệt nhau** (đã verify bằng `diff`). Không xoá thì lệnh merge sẽ báo *"untracked working tree files would be overwritten"*.
+### Bước 1 — Push `main` lên GitHub
+
+Shell của Cowork không có credential GitHub nên không push được. Mở terminal trên Windows:
 
 ```bash
 cd D:\unihack-escrow-project
-
-del docs\agent-ops\reports\ESC-020-report.md
-del docs\agent-ops\reports\ESC-030-report.md
-del docs\agent-ops\reports\ESC-040-report.md
-```
-
-> Yên tâm: 3 file này sẽ được merge trả lại nguyên vẹn ở bước 2.
-
----
-
-## BƯỚC 2 — Merge toàn bộ Phase 3+4 vào `main`
-
-```bash
-git checkout main
-git merge --ff-only phase/4c-frontend-integration
-```
-
-Dùng `--ff-only` có chủ đích: nếu vì lý do nào đó không fast-forward được, lệnh sẽ **dừng lại an toàn** thay vì tạo merge commit lộn xộn.
-
-**Kiểm tra sau merge:**
-
-```bash
-git log -1 --oneline          # phải ra a1ad5bc
-dir frontend\app              # phải thấy page.tsx, trade/, admin/, api/
-```
-
----
-
-## BƯỚC 3 — Commit toàn bộ tài liệu + dọn cấu trúc docs
-
-Working tree đang có 53 thay đổi chưa commit. Phần lớn là bạn đã **tái cấu trúc** thư mục: xoá `Escrow_Marketplace_AI_Operating_Kit/` và chuyển nội dung ra `docs/` ở root. Git nhìn thấy đó là delete + add.
-
-Sau khi merge bước 2, sẽ xuất hiện **trùng lặp** cần dọn: branch `4c` mang về `docs/FRONTEND_SPEC.md` (vị trí cũ), trong khi bản bạn đang dùng nằm ở `docs/specs/FRONTEND_SPEC.md`.
-
-```bash
-# Xoá 4 file spec ở vị trí cũ (bản mới đã có trong docs/specs/)
-git rm docs/FRONTEND_SPEC.md docs/L1_MODULE_SPEC.md ^
-       docs/SLIDE_AND_VIDEO_SCRIPT.md docs/VAI3_DYNAMIC_DEPOSIT_SPEC.md
-
-# Stage tất cả: deletions + docs mới
-git add -A
-
-# Kiểm tra KỸ trước khi commit — tuyệt đối không được có .env
-git status
-git diff --cached --name-only | findstr /I ".env"
-```
-
-Lệnh `findstr` cuối phải **không in ra gì**. Nếu in ra bất cứ dòng nào → dừng lại, `git reset` và báo tôi.
-
-```bash
-git commit -m "docs: restructure operating kit into docs/, add specs, task specs and QA reports"
 git push origin main
 ```
 
----
-
-## BƯỚC 4 — Dọn worktree mồ côi
-
-Antigravity để lại một worktree trỏ tới thư mục đã bị xoá:
-
-```
-C:/Users/OS/.gemini/antigravity/worktrees/unihack-escrow-project/add_ssrf_api_key_hardening  [prunable]
-```
-
-Worktree này đang **giữ branch `phase/4c-integration`**, khiến bạn không checkout được branch đó. Dọn:
-
-```bash
-git worktree prune
-git worktree list          # chỉ còn 1 dòng
-```
-
-**Branch trùng tên có thể xoá** (mỗi cặp trỏ cùng một commit, chỉ là đặt tên khác nhau):
-
-```bash
-git branch -d phase/4a-scaffold phase/4b-pages phase/4c-integration add_ssrf_api_key_hardening
-```
+`main` đang đi trước `origin/main` **8 commit**. Sau khi push, repo public sẽ hiện đầy đủ sản phẩm thay vì chỉ scaffold.
 
 ---
 
-## BƯỚC 5 — Tạo 2 ví Fuji riêng biệt
+### Bước 2 — Sửa mô tả repo trên GitHub
+
+Repo <https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack> đang hiển thị mô tả **"PHẦN MỀM QUẢN LÝ SỰ KIỆN"** (sót lại từ project UniAttend cũ). Giám khảo sẽ nhìn thấy dòng này đầu tiên.
+
+Vào repo → nút ⚙️ cạnh "About" (góc phải trên) → sửa:
+
+- **Description:** `Trustless escrow marketplace on Avalanche with AI-verified evidence attestation`
+- **Topics:** `avalanche` `blockchain` `escrow` `ai-agent` `computer-vision` `solidity` `nextjs`
+
+Đồng thời kiểm tra:
+
+- Repo đã **Public** chưa (Settings → General → Danger Zone)
+- Đã add collaborator **`tuantqse90`** chưa (Settings → Collaborators)
+
+> BTC ghi rõ: mọi link phải mở công khai được, nếu không sẽ bị loại.
+
+---
+
+### Bước 3 — Tạo 2 ví Fuji riêng biệt
 
 Theo **DEC-009**, deployer và agent phải là **2 private key khác nhau**.
 
 | Ví | Vai trò on-chain | Quyền |
 |---|---|---|
-| **Deployer** | `Escrow.owner()` | `resolveDispute()`, rút phí |
+| **Deployer** | `Escrow.owner()` | `resolveDispute()`, quản trị |
 | **AI Agent** | `Escrow.agent()` | Chỉ `attest()` |
 
-Lý do tách: agent key nằm trong `backend/.env` và được dùng tự động để ký `attest()`. Nếu lộ, attacker chỉ giả mạo được attestation — **không chạm được vào tiền** trong escrow.
+Lý do tách: agent key nằm trong `backend/.env` và được dùng tự động để ký `attest()`. Nếu lộ, kẻ tấn công chỉ giả mạo được attestation — **không chạm được vào tiền** trong escrow.
 
-**Cách tạo** — chọn 1 trong 2:
+**Cách A — Foundry (nhanh nhất):**
 
 ```bash
-# Cách A: Foundry (chạy 2 lần, lưu kết quả riêng)
 cast wallet new
-
-# Cách B: MetaMask → Account menu → Add account → đặt tên "Deployer" và "AI Agent"
-#         rồi export private key từng account
 ```
 
-> Tự chạy trên máy bạn. Đừng paste private key vào chat, commit, hay screenshot. Tôi không đọc các file `.env`.
+Chạy **2 lần**. Mỗi lần in ra một cặp `Address` + `Private key`. Ghi lại riêng, đánh dấu rõ cái nào là Deployer, cái nào là Agent.
 
-Thêm mạng Fuji vào MetaMask nếu chưa có:
+**Cách B — MetaMask:**
+
+1. Mở MetaMask → menu account (góc trên) → **Add account** → đặt tên `Deployer`
+2. Lặp lại, đặt tên `AI Agent`
+3. Với mỗi account: ⋮ → **Account details** → **Show private key** → nhập mật khẩu → copy
+
+**Thêm mạng Fuji vào MetaMask** (nếu chưa có):
 
 | Field | Giá trị |
 |---|---|
@@ -163,143 +99,140 @@ Thêm mạng Fuji vào MetaMask nếu chưa có:
 | RPC URL | `https://api.avax-test.network/ext/bc/C/rpc` |
 | Chain ID | `43113` |
 | Symbol | `AVAX` |
-| Explorer | `https://testnet.snowtrace.io` |
+| Block Explorer | `https://testnet.snowtrace.io` |
 
 ---
 
-## BƯỚC 6 — Xin AVAX từ faucet (làm sớm, có cooldown)
+### Bước 4 — Xin AVAX từ faucet
 
 Faucet chính thức: <https://core.app/tools/testnet-faucet/>
 
 **Hai ràng buộc cần biết trước:**
 
 1. Faucet chỉ cho dùng miễn phí nếu ví có **mainnet AVAX balance > 0**. Ví trắng hoàn toàn thì phải lấy coupon qua Guild, hoặc xin trong Discord chính thức của Avalanche.
-2. **Cooldown 1 request / 2 giờ.** Hai ví × vài lần request có thể mất nửa ngày.
+2. **Cooldown 1 request / 2 giờ** — hai ví có thể mất nửa ngày.
 
-**Lượng AVAX thực sự cần** — task spec ghi ≥2 AVAX/ví nhưng đó là con số rất dư:
+**Lượng thực sự cần** (task spec ghi ≥2 AVAX/ví là rất dư):
 
-| Ví | Mục đích tiêu gas | Thực tế cần |
+| Ví | Tiêu gas vào | Thực tế cần |
 |---|---|---|
 | Deployer | Deploy 2 contracts + `setEscrow()` | ~0.1–0.2 AVAX |
-| AI Agent | Mỗi lần `attest()` | ~0.01 AVAX/lần |
+| AI Agent | Mỗi lần `attest()` ~0.01 AVAX | ~0.1 AVAX |
 
-**0.5–1 AVAX mỗi ví là thừa đủ** cho deploy + demo. Đừng để cooldown faucet chặn tiến độ 11 ngày còn lại.
+**0.5 AVAX mỗi ví là thừa đủ.** Đừng để cooldown chặn tiến độ.
 
-Faucet dự phòng nếu Core từ chối: QuickNode Avalanche faucet, hoặc Discord Avalanche (admin/mod cấp tay).
+Faucet dự phòng: QuickNode Avalanche faucet, hoặc Discord Avalanche (admin cấp tay).
 
 ---
 
-## BƯỚC 7 — Tạo 3 file `.env`
+### Bước 5 — Điền key vào 3 file `.env`
 
-Hiện **chưa có file `.env` nào** trong repo. Cần tạo cả 3.
+Ba file đã tạo sẵn đầy đủ biến và comment hướng dẫn. Bạn chỉ cần điền **3 chỗ**.
 
-### 7.1 — `contracts/.env`
-
-Foundry đọc `.env` từ thư mục chạy `forge`, nên file này phải nằm trong `contracts/`.
+#### 5.1 — `contracts/.env`
 
 ```
 PRIVATE_KEY=<private key ví DEPLOYER>
-AGENT_ADDRESS=<ĐỊA CHỈ PUBLIC 0x... của ví agent>
-EVIDENCE_WINDOW_SECS=600
-ATTEST_WINDOW_SECS=600
-DISPUTE_WINDOW_SECS=90
+AGENT_ADDRESS=<ĐỊA CHỈ PUBLIC 0x... của ví AGENT>
 ```
 
-> **Chỗ dễ sai nhất:** `AGENT_ADDRESS` là **địa chỉ công khai** `0x...` (40 hex chars), KHÔNG phải private key. Script gọi `vm.envAddress("AGENT_ADDRESS")` — bỏ nhầm private key vào sẽ fail parse address.
+> **Chỗ dễ sai nhất:** `AGENT_ADDRESS` là địa chỉ công khai `0x...` (42 ký tự), **không phải** private key. Script gọi `vm.envAddress()` — dán nhầm key vào sẽ fail parse address ngay.
 
-Ba biến `*_WINDOW_SECS` là window rút ngắn cho demo (10 phút / 10 phút / 90 giây). Nếu **không set**, `vm.envOr` fallback về mặc định 3 ngày / 1 ngày / 2 ngày → không demo kịp.
+Ba biến `*_WINDOW_SECS` đã set sẵn `600 / 600 / 90` (10 phút / 10 phút / 90 giây) cho demo. Nếu để trống, `vm.envOr` fallback về **3 ngày / 1 ngày / 2 ngày** → không demo kịp.
 
-### 7.2 — `backend/.env`
+#### 5.2 — `backend/.env`
 
 ```
-RPC_URL=https://api.avax-test.network/ext/bc/C/rpc
 AGENT_PRIVATE_KEY=<private key ví AGENT>
-ESCROW_ADDRESS=
 ```
 
-`ESCROW_ADDRESS` **để trống** — backend tự đọc từ `contracts/deployments/43113.json` sau khi deploy xong. Agent ESC-050 sẽ điền nếu cần.
+`ESCROW_ADDRESS` để trống — backend tự đọc từ `contracts/deployments/43113.json` sau deploy.  
+`ATTEST_API_KEY` đã sinh sẵn, **không sửa** (đã khớp với frontend).
 
-Nếu máy bạn có Tesseract ở đường dẫn không chuẩn, thêm:
-
-```
-TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
-```
-
-### 7.3 — `frontend/.env.local`
-
-Tạo trống trước, agent ESC-050 sẽ điền địa chỉ sau deploy. Các biến frontend cần:
+#### 5.3 — `frontend/.env.local`
 
 ```
-NEXT_PUBLIC_CHAIN_ID=43113
-NEXT_PUBLIC_ESCROW_ADDRESS=
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-NEXT_PUBLIC_IPFS_GATEWAY=https://gateway.pinata.cloud/ipfs/
-PINATA_JWT=<JWT từ pinata.cloud — KHÔNG có prefix NEXT_PUBLIC_>
+PINATA_JWT=<JWT từ pinata.cloud>
 ```
 
-> `PINATA_JWT` **tuyệt đối không** được đặt tên `NEXT_PUBLIC_PINATA_JWT` — Next.js sẽ nhúng nó vào bundle client và lộ ra trình duyệt. Route `/api/pin` chạy server-side nên đọc được biến không có prefix.
+Lấy JWT: đăng ký <https://pinata.cloud> (free tier đủ dùng) → **API Keys** → **New Key** → bật quyền `pinFileToIPFS` → copy **JWT** (không phải API Key/Secret).
 
-Nếu chưa có tài khoản Pinata: route `/api/pin` có **mock fallback** sinh CID giả, vẫn chạy được flow nhưng ảnh không thật sự lên IPFS. Demo nên có JWT thật.
+> Để trống vẫn chạy được — route `/api/pin` có mock fallback sinh CID giả, nhưng ảnh không thật sự lên IPFS. **Demo nên có JWT thật.**
 
-### Xác nhận bảo mật — tôi đã verify hộ
+Ba dòng `NEXT_PUBLIC_ESCROW_ADDRESS` / `TOKEN_ADDRESS` / `DEPLOY_BLOCK` để trống — agent ESC-050 điền sau deploy.
 
-Chạy `git check-ignore` trên cả 4 đường dẫn, tất cả đều được `.gitignore` bắt đúng:
-
-| Path | Trạng thái |
-|---|---|
-| `.env` | ✅ ignored |
-| `contracts/.env` | ✅ ignored |
-| `backend/.env` | ✅ ignored |
-| `frontend/.env.local` | ✅ ignored |
-
-Git hiện chỉ track `backend/.env.example` (template rỗng, không có giá trị thật). An toàn để tạo cả 3 file trên.
+`NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` để trống cũng chạy local được (RainbowKit chỉ cảnh báo). Nếu muốn demo kết nối ví mobile thì lấy free tại <https://cloud.walletconnect.com>.
 
 ---
 
-## BƯỚC 8 — Verify trước khi dispatch ESC-050
+### Bước 6 — Verify trước khi dispatch ESC-050
+
+Chạy trên Windows (shell Cowork không có `forge`/`cast`):
 
 ```bash
-# 1. Số dư 2 ví (cả hai phải khác 0)
+cd D:\unihack-escrow-project\contracts
+
+# 1. Số dư 2 ví — cả hai phải khác 0
 cast balance <deployer_address> --rpc-url fuji
 cast balance <agent_address>    --rpc-url fuji
 
-# 2. Foundry đọc được env chưa
-cd contracts
+# 2. DRY RUN — quan trọng nhất
 forge script script/Deploy.s.sol --rpc-url fuji
 #    ^ KHÔNG có --broadcast = chỉ simulate, không tốn gas, không lên chain
 
-# 3. Regression: contract source không đổi
+# 3. Regression
 forge test
 ```
 
-Alias `fuji` đã khai báo sẵn trong `foundry.toml` (`rpc_endpoints`), nên không cần gõ URL đầy đủ.
+Alias `fuji` đã khai báo sẵn trong `foundry.toml` (`rpc_endpoints`), không cần gõ URL đầy đủ.
 
-Bước 2 là **dry run quan trọng nhất** — nó bắt hết lỗi env (thiếu biến, sai format address) trước khi tiêu AVAX thật.
-
----
-
-## Checklist tổng
-
-```
-[ ] B1. Xoá 3 file ESC-0x0-report.md untracked
-[ ] B2. git merge --ff-only phase/4c-frontend-integration
-[ ] B3. Commit + push toàn bộ docs (kiểm tra không lẫn .env)
-[ ] B4. git worktree prune + xoá branch trùng tên
-[ ] B5. Tạo ví Deployer + ví AI Agent (2 key khác nhau)
-[ ] B6. Faucet đủ ~0.5-1 AVAX mỗi ví
-[ ] B7. Tạo contracts/.env + backend/.env + frontend/.env.local
-[ ] B8. cast balance OK + forge script dry-run OK + forge test pass
-[ ] → Dispatch ESC-050 cho Antigravity
-```
-
-**Thứ tự bắt buộc:** B1 → B2 → B3 trước, vì agent ESC-050 sẽ branch từ `main`. Nếu `main` chưa có frontend thì deploy xong cũng không demo được.
-
-B5 → B6 có thể làm **song song** với B1-B4 (faucet có cooldown, xin càng sớm càng tốt).
+**Bước 2 bắt hết lỗi env** (thiếu biến, sai format address, key không hợp lệ) trước khi tiêu AVAX thật. Nếu dry-run pass thì broadcast gần như chắc chắn thành công.
 
 ---
 
-## Lưu ý vai trò
+## Checklist
 
-Theo quy ước project: **Project Owner merge, agent không merge.** Tất cả lệnh git ở B1-B4 bạn tự chạy. Tôi (PM/QA) không tự merge và không sửa application code — chỉ quét trạng thái và viết checklist này.
+```
+[ ] 1. git push origin main                    (Windows terminal)
+[ ] 2. Sửa description repo + check Public + collaborator tuantqse90
+[ ] 3. Tạo ví Deployer + ví AI Agent (2 key KHÁC NHAU)
+[ ] 4. Faucet ~0.5 AVAX mỗi ví
+[ ] 5. Điền 3 chỗ: PRIVATE_KEY, AGENT_ADDRESS, AGENT_PRIVATE_KEY (+ PINATA_JWT)
+[ ] 6. cast balance OK → forge script dry-run OK → forge test pass
+[ ] → Báo Cowork để xuất Task Specification ESC-050
+```
 
-Sau khi xong B1-B8, báo tôi để tôi xuất Task Specification ESC-050 cho Antigravity.
+Bước 3–4 nên làm **song song** với bước 1–2 (faucet có cooldown, xin càng sớm càng tốt).
+
+---
+
+## Dọn dẹp tuỳ chọn
+
+**Chặn CRLF tái diễn** — nguyên nhân khiến 810 file hiện "modified" giả:
+
+```bash
+git config core.autocrlf true
+```
+
+Chỉ ảnh hưởng repo này trên máy bạn, không đụng đồng đội.
+
+**Xoá backup README** sau khi xem xong:
+
+```bash
+del README.local-backup.md
+```
+
+**Branch cũ** — 4 branch phase vẫn giữ nguyên, có thể xoá sau khi push main thành công:
+
+```bash
+git branch -d phase/3a-backend-hardening phase/4a-frontend-scaffold ^
+             phase/4b-core-pages phase/4c-frontend-integration
+```
+
+---
+
+## Lưu ý bảo mật
+
+Cowork **không đọc, không in, không commit** nội dung file `.env` nào. Ba file đã verify `git check-ignore` — tất cả đều ignored đúng, không thể vô tình commit.
+
+Khi điền private key: đừng paste vào chat, đừng screenshot, đừng commit. Nếu lỡ lộ, tạo ví mới và deploy lại — testnet nên không mất gì.
