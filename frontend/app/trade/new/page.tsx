@@ -8,6 +8,7 @@ import { escrowAddress, escrowAbi, chainId } from '@/lib/contracts';
 import { targetChain } from '@/lib/wagmi';
 import { useReputation } from '@/hooks/useReputation';
 import { getReadableError } from '@/lib/errors';
+import { uploadToIpfs, validateEvidenceFile, setStoredListingUri } from '@/lib/ipfs';
 import {
   ShieldCheck,
   Coins,
@@ -17,6 +18,9 @@ import {
   ArrowRight,
   AlertTriangle,
   Loader2,
+  Image as ImageIcon,
+  UploadCloud,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -30,11 +34,32 @@ export default function CreateTradePage() {
   const [itemValue, setItemValue] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [listingFile, setListingFile] = useState<File | null>(null);
+  const [listingPreview, setListingPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Read buyer reputation preview
   const isValidBuyerAddress = isAddress(buyerAddress) && (!address || buyerAddress.toLowerCase() !== address.toLowerCase());
   const { score: buyerReputation } = useReputation(isValidBuyerAddress ? buyerAddress : undefined);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const err = validateEvidenceFile(file, { allowVideo: false });
+    if (err) {
+      toast.error(err);
+      return;
+    }
+    setListingFile(file);
+    const url = URL.createObjectURL(file);
+    setListingPreview(url);
+  };
+
+  const removeListingFile = () => {
+    setListingFile(null);
+    if (listingPreview) URL.revokeObjectURL(listingPreview);
+    setListingPreview(null);
+  };
 
   // Live deposit calculation (30% MAX_DEPOSIT_BPS)
   const depositPreview = (() => {
@@ -57,7 +82,8 @@ export default function CreateTradePage() {
     !isValidBuyerAddress ||
     !itemValue ||
     parseFloat(itemValue) <= 0 ||
-    !title.trim();
+    !title.trim() ||
+    !listingFile;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,13 +114,27 @@ export default function CreateTradePage() {
       return;
     }
 
+    if (!listingFile) {
+      toast.error('Vui lòng tải lên ảnh niêm yết vật phẩm sưu tầm (listing image).');
+      return;
+    }
+
     setIsSubmitting(true);
-    const toastId = toast.loading('Đang chuẩn bị ký giao dịch tạo escrow trên ví...');
+    const toastId = toast.loading('Đang upload ảnh niêm yết lên IPFS...');
 
     try {
+      // 1. Upload ảnh niêm yết lên IPFS
+      const pinResult = await uploadToIpfs(listingFile);
+      const listingUri = pinResult.uri;
+
+      if (pinResult.mock) {
+        toast.info('Chưa cấu hình PINATA_JWT — sử dụng CID IPFS mô phỏng.', { duration: 4000 });
+      }
+
+      // 2. Ký giao dịch tạo Escrow on-chain
+      toast.loading('Đang chuẩn bị ký giao dịch tạo escrow trên ví...', { id: toastId });
       const itemValueWei = parseEther(itemValue);
 
-      // Call createTrade(buyer, itemValue)
       const txHash = await writeContractAsync({
         address: escrowAddress,
         abi: escrowAbi,
@@ -120,7 +160,6 @@ export default function CreateTradePage() {
       let createdTradeId = '1';
       for (const log of receipt.logs) {
         if (log.topics[0] && log.topics[1]) {
-          // TradeCreated(tradeId indexed, seller indexed, buyer indexed, ...)
           try {
             const rawId = BigInt(log.topics[1]);
             createdTradeId = rawId.toString();
@@ -131,16 +170,18 @@ export default function CreateTradePage() {
         }
       }
 
-      // Save local metadata (title, description)
+      // Save local metadata (title, description, listingUri)
       try {
         localStorage.setItem(
           `meta:${chainId}:${createdTradeId}`,
           JSON.stringify({
             title: title.trim(),
             description: description.trim(),
+            listingUri,
             createdAt: Date.now(),
           })
         );
+        setStoredListingUri(createdTradeId, listingUri);
       } catch {
         // ignore storage errors
       }
@@ -222,6 +263,58 @@ export default function CreateTradePage() {
             placeholder="Mô tả chi tiết góc cạnh, bề mặt, số seri và phụ kiện đi kèm..."
             className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
           />
+        </div>
+
+        {/* Listing Image Upload */}
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold text-slate-300 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <ImageIcon className="w-4 h-4 text-indigo-400" />
+              Ảnh niêm yết gốc (Listing Image) <span className="text-rose-500">*</span>
+            </span>
+            <span className="text-[11px] text-slate-500">JPG, PNG, WEBP (Tối đa 10MB)</span>
+          </label>
+
+          {listingPreview ? (
+            <div className="relative rounded-xl border border-slate-700 bg-slate-950/80 p-3 flex items-center gap-4">
+              <img
+                src={listingPreview}
+                alt="Listing preview"
+                className="w-20 h-20 object-cover rounded-lg border border-slate-800"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{listingFile?.name}</p>
+                <p className="text-[11px] text-slate-400">
+                  {listingFile ? `${(listingFile.size / (1024 * 1024)).toFixed(2)} MB` : ''}
+                </p>
+                <p className="text-[11px] text-emerald-400 mt-1">✓ Sẵn sàng upload lên IPFS khi tạo hợp đồng</p>
+              </div>
+              <button
+                type="button"
+                onClick={removeListingFile}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-rose-400 transition-colors"
+                title="Xóa ảnh"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <label className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl p-6 text-center cursor-pointer transition-colors bg-slate-950/40 block group space-y-2">
+              <UploadCloud className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 mx-auto transition-colors" />
+              <div className="text-xs text-slate-300 font-medium">
+                Kéo thả hoặc <span className="text-indigo-400 underline">chọn ảnh niêm yết</span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Ảnh này sẽ làm ảnh đối chiếu gốc cho AI khi so sánh với bằng chứng mở hộp / đóng gói
+              </p>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </label>
+          )}
         </div>
 
         {/* Buyer Address */}

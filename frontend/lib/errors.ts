@@ -23,8 +23,14 @@ export function getReadableError(error: unknown): string {
   if (/wrong deposit amount/i.test(errStr)) {
     return 'Số tiền nạp cọc không khớp với số tiền yêu cầu.';
   }
-  if (/already deposited/i.test(errStr)) {
+  if (/already\s*deposited/i.test(errStr)) {
     return 'Bạn đã nạp cọc cho giao dịch này rồi.';
+  }
+  if (/violator not a party/i.test(errStr)) {
+    return 'Bên bị xử phạt phải là Người bán, Người mua, hoặc địa chỉ 0.';
+  }
+  if (/zero address/i.test(errStr)) {
+    return 'Địa chỉ không được là 0x0.';
   }
   if (/evidence window closed/i.test(errStr)) {
     return 'Đã quá hạn nộp bằng chứng.';
