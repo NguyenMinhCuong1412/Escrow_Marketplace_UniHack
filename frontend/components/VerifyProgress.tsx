@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { verifyEvidence } from '@/lib/backend';
+import { verifyEvidence, getRegisteredUris } from '@/lib/backend';
 import {
   getStoredListingUri,
   getStoredEvidenceUri,
@@ -57,6 +57,16 @@ export const VerifyProgress: React.FC<VerifyProgressProps> = ({
     setListingUri(l);
     setSellerUri(s);
     setBuyerUri(b);
+    // Trình duyệt khác với bên nộp → localStorage trống: lấy URI đã đăng ký ở backend.
+    if (!l || !s || !b) {
+      getRegisteredUris(tradeId)
+        .then((u) => {
+          if (!l && u.listing) setListingUri(u.listing);
+          if (!s && u.seller) setSellerUri(u.seller);
+          if (!b && u.buyer) setBuyerUri(u.buyer);
+        })
+        .catch(() => undefined);
+    }
   }, [tradeId]);
 
   // Step ticker during verification

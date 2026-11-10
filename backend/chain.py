@@ -116,6 +116,12 @@ class EscrowClient:
     def reputation_of(self, who: str) -> int:
         return int(self.escrow.functions.reputationOf(Web3.to_checksum_address(who)).call())
 
+    def next_trade_id(self) -> int:
+        try:
+            return int(self.escrow.functions.nextTradeId().call())
+        except Exception as e:
+            raise ChainError(f"nextTradeId() failed: {e}") from e
+
     def latest_timestamp(self) -> int:
         return int(self.w3.eth.get_block("latest")["timestamp"])
 

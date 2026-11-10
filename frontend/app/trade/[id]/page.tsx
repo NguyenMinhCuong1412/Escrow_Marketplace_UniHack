@@ -16,6 +16,7 @@ import { CountdownTimer } from '@/components/CountdownTimer';
 import { TradeTimeline } from '@/components/TradeTimeline';
 import { EvidenceUploader } from '@/components/EvidenceUploader';
 import { VerifyProgress } from '@/components/VerifyProgress';
+import { AgentStatusCard } from '@/components/AgentStatusCard';
 import { formatDateTime, formatAvax } from '@/lib/format';
 import { getReadableError } from '@/lib/errors';
 import { getStoredListingUri, ipfsToGatewayUrl } from '@/lib/ipfs';
@@ -425,10 +426,16 @@ export default function TradeDetailPage() {
                 onSuccess={() => refetch()}
               />
 
-              <VerifyProgress
+              <AgentStatusCard
                 tradeId={trade.id}
-                canVerify={sellerHasEvidence && buyerHasEvidence}
-                onSuccess={() => refetch()}
+                onAttested={() => refetch()}
+                fallback={
+                  <VerifyProgress
+                    tradeId={trade.id}
+                    canVerify={sellerHasEvidence && buyerHasEvidence}
+                    onSuccess={() => refetch()}
+                  />
+                }
               />
             </div>
           )}

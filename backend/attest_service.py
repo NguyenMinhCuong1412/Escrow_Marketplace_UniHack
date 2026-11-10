@@ -1,12 +1,14 @@
 """
 attest_service.py
 ------------------
-Giai đoạn 1 (Cách B, đã chốt trong CLAUDE.md): AI pipeline chạy như một module
-trong backend, kích hoạt theo request khi buyer/seller đã nộp đủ bằng chứng —
-KHÔNG phải daemon chạy nền độc lập (đó là Giai đoạn 2, chỉ làm sau 16/11 nếu
-còn thời gian).
+Backend AI attest. Hai cách kích hoạt, dùng CHUNG một lõi xác thực (run_verification):
 
-Flow POST /verify-evidence:
+* Thủ công (DEC-005 phương án B): POST /verify-evidence — client gửi 3 URI.
+* Tự động (DEC-005 phương án A, bật bằng AGENT_AUTO=true): agent chạy nền trong
+  auto_agent.py tự quét contract, giao dịch nào đủ bằng chứng + đủ URI đã đăng ký
+  (POST /trade/{id}/uris) thì tự verify và tự attest. Xem GET /agent/status/{id}.
+
+Lõi xác thực:
   1. Đọc giao dịch TỪ CHAIN (không tin dữ liệu client gửi): state, nonce,
      itemValue, evidence hash, reputation hai bên.
   2. Kiểm tra keccak256(evidenceUri) khớp hash đã neo on-chain → không ai đổi
@@ -32,9 +34,10 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlparse, urljoin
 
 import requests
@@ -53,6 +56,8 @@ import imagehash  # noqa: E402
 from chain import (  # noqa: E402
     ChainError, EscrowClient, TradeState, evidence_hash_of, find_escrow_address, load_abi,
 )
+
+from auto_agent import AutoAgent, UriConflict, UriRegistry, listing_message, recover_signer  # noqa: E402
 
 log = logging.getLogger("attest")
 
@@ -92,6 +97,8 @@ class Settings:
     enforce_evidence_hash: bool = True
     cors_origins: list[str] = field(default_factory=list)  # rỗng = không cho phép origin nào
     download_timeout: int = 30
+    agent_auto: bool = False          # True: agent chạy nền tự verify + attest (DEC-005 phương án A)
+    agent_poll_seconds: float = 5.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -109,6 +116,8 @@ class Settings:
             attest_api_key=os.environ.get("ATTEST_API_KEY") or None,
             enforce_evidence_hash=_env_bool("ENFORCE_EVIDENCE_HASH", True),
             cors_origins=cors_origins,
+            agent_auto=_env_bool("AGENT_AUTO", False),
+            agent_poll_seconds=float(os.environ.get("AGENT_POLL_SECONDS", cls.agent_poll_seconds)),
         )
         if os.environ.get("ESCROW_ABI_PATH"):
             s.escrow_abi_path = Path(os.environ["ESCROW_ABI_PATH"])
@@ -316,6 +325,12 @@ class VerifyRequest(BaseModel):
     include_visual: bool = True
 
 
+class UriRequest(BaseModel):
+    role: Literal["listing", "seller", "buyer"]
+    uri: str = Field(min_length=8, max_length=2048)
+    signature: Optional[str] = None  # bắt buộc với role="listing": chữ ký ví của seller
+
+
 class VerifyResponse(BaseModel):
     trade_id: int
     report: dict
@@ -333,7 +348,15 @@ class VerifyResponse(BaseModel):
 
 def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClient] = None) -> FastAPI:
     settings = settings or Settings.from_env()
-    app = FastAPI(title="Escrow AI Attest Service", version="1.0.0")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if settings.agent_auto:
+            agent.start()
+        yield
+        agent.stop()
+
+    app = FastAPI(title="Escrow AI Attest Service", version="1.1.0", lifespan=lifespan)
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -345,6 +368,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
 
     reports_dir = settings.data_dir / "reports"
     store = KnownHashStore(settings.data_dir / "known_hashes.json")
+    registry = UriRegistry(settings.data_dir / "trade_uris.json")
     state = {"client": client}
     trade_locks: dict[int, threading.Lock] = {}
     trade_locks_guard = threading.Lock()
@@ -399,6 +423,8 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             info.update({"ok": False, "error": e.detail})
         except Exception as e:
             info.update({"ok": False, "error": f"RPC error: {e}"})
+        info.update({"agent_auto": settings.agent_auto, "agent_running": agent.running,
+                     "agent_last_tick": agent.last_tick, "agent_error": agent.last_error})
         return info
 
     @app.get("/trade/{trade_id}")
@@ -420,33 +446,40 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             raise HTTPException(404, f"Chưa có report cho trade {trade_id}")
         return json.loads(f.read_text(encoding="utf-8"))
 
-    @app.post("/verify-evidence", response_model=VerifyResponse)
-    def verify_evidence(
-        req: VerifyRequest,
-        request: Request,
-        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
-    ):
-        started = time.time()
-
-        # 1. API Key Auth
+    def check_api_key(x_api_key: Optional[str]) -> None:
         if settings.attest_api_key:
             if not x_api_key or x_api_key != settings.attest_api_key:
                 raise HTTPException(status_code=401, detail="Invalid or missing API key")
         else:
             log.warning("ATTEST_API_KEY không được thiết lập - bỏ qua xác thực (chế độ dev)")
 
-        # 2. In-memory Rate Limiter (10 req/min/IP)
+    def check_rate_limit(request: Request, bucket: str = "verify", limit: int = RATE_LIMIT_MAX_REQUESTS) -> None:
+        """In-memory rate limiter per (bucket, IP); each endpoint group has its own quota."""
         client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+        key = client_ip if bucket == "verify" else f"{bucket}:{client_ip}"
         now = time.time()
         with rate_limit_lock:
-            timestamps = rate_limit_records.get(client_ip, [])
+            timestamps = rate_limit_records.get(key, [])
             timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
-            if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
-                rate_limit_records[client_ip] = timestamps
-                raise HTTPException(status_code=429, detail="Too Many Requests: Rate limit exceeded (10 req/min)")
+            if len(timestamps) >= limit:
+                rate_limit_records[key] = timestamps
+                raise HTTPException(status_code=429, detail=f"Too Many Requests: Rate limit exceeded ({limit} req/min)")
             timestamps.append(now)
-            rate_limit_records[client_ip] = timestamps
+            rate_limit_records[key] = timestamps
 
+    @app.post("/verify-evidence", response_model=VerifyResponse)
+    def verify_evidence(
+        req: VerifyRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    ):
+        check_api_key(x_api_key)   # 1. API Key Auth
+        check_rate_limit(request)  # 2. Rate limit (10 req/min/IP)
+        return run_verification(req)
+
+    def run_verification(req: VerifyRequest) -> VerifyResponse:
+        """Verification core shared by the manual endpoint and the autonomous agent (DEC-005 option A)."""
+        started = time.time()
         c = get_client()
 
         # 3. Validate listing_image_url scheme (must be ipfs://)
@@ -548,6 +581,74 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             return resp
         finally:
             lock.release()
+
+    # -----------------------------------------------------------------------
+    # Agent tự động: sổ URI + trạng thái
+    # -----------------------------------------------------------------------
+
+    def agent_verify(trade_id: int, uris: dict[str, str]) -> VerifyResponse:
+        return run_verification(VerifyRequest(
+            trade_id=trade_id, listing_image_url=uris["listing"],
+            seller_evidence_url=uris["seller"], buyer_evidence_url=uris["buyer"],
+        ))
+
+    agent = AutoAgent(get_client, registry, agent_verify, settings.agent_poll_seconds)
+    app.state.agent = agent
+    app.state.registry = registry
+
+    def load_trade(trade_id: int):
+        try:
+            t = get_client().get_trade(trade_id)
+        except ChainError as e:
+            raise HTTPException(502, str(e))
+        if not t.exists:
+            raise HTTPException(404, f"Trade {trade_id} không tồn tại")
+        return t
+
+    @app.post("/trade/{trade_id}/uris")
+    def register_uri(
+        trade_id: int,
+        body: UriRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    ):
+        """Báo cho agent biết URI thật của ảnh niêm yết / bằng chứng. Không tin client:
+        bằng chứng phải khớp hash đã neo on-chain, ảnh niêm yết phải có chữ ký ví seller."""
+        check_api_key(x_api_key)
+        check_rate_limit(request, "uris", 60)
+        if not body.uri.startswith("ipfs://"):
+            raise HTTPException(422, "uri must be an ipfs:// URI")
+        t = load_trade(trade_id)
+        if body.role == "listing":
+            if not body.signature:
+                raise HTTPException(422, "Thiếu chữ ký của seller cho ảnh niêm yết")
+            c = get_client()
+            msg = listing_message(c.chain_id(), c.escrow.address, trade_id, body.uri)
+            try:
+                signer = recover_signer(msg, body.signature)
+            except Exception:
+                raise HTTPException(422, "Chữ ký không hợp lệ")
+            if signer.lower() != t.seller.lower():
+                raise HTTPException(403, "Chữ ký không phải của seller giao dịch này")
+        else:
+            onchain = t.seller_evidence_hash if body.role == "seller" else t.buyer_evidence_hash
+            if onchain == "0x" + "00" * 32:
+                raise HTTPException(409, f"{body.role} chưa nộp bằng chứng on-chain")
+            if evidence_hash_of(body.uri) != onchain:
+                raise HTTPException(422, f"uri không khớp {body.role}EvidenceHash on-chain")
+        try:
+            registry.set(trade_id, body.role, body.uri)
+        except UriConflict as e:
+            raise HTTPException(409, str(e))
+        return {"trade_id": trade_id, "uris": registry.get(trade_id)}
+
+    @app.get("/trade/{trade_id}/uris")
+    def get_uris(trade_id: int):
+        return {"trade_id": trade_id, "uris": registry.get(trade_id)}
+
+    @app.get("/agent/status/{trade_id}")
+    def agent_status(trade_id: int):
+        return {"enabled": settings.agent_auto, **agent.status_for(load_trade(trade_id))}
 
     return app
 

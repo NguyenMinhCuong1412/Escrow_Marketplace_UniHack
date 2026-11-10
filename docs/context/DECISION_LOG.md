@@ -17,6 +17,7 @@ Ghi các quyết định đã được Owner phê duyệt. Không xóa quyết �
 | DEC-010 | 2026-11-04 | `resolveDispute(id, address(0))` = không ai sai (AI flag nhầm) → hoàn đủ cọc cả hai bên | CONFIRMED | Cần escape hatch cho false positive của AI. Công bằng | Quốc | Foundry tests |
 | DEC-011 | 2026-11-04 | Frontend chỉ viết spec (Phase 2) — AI khác hoặc team member code theo `docs/FRONTEND_SPEC.md`. Đề xuất: Next.js + Tailwind + wagmi/viem | CONFIRMED | Tiết kiệm token Claude Code cho phần nặng (contract + AI + backend) | Quốc | `docs/FRONTEND_SPEC.md` |
 | DEC-012 | 2026-11-04 | Feature freeze 16/11/2026. Sau đó chỉ slide + video + kiểm tra link | CONFIRMED | Đảm bảo đủ thời gian cho presentation (10% điểm) và kiểm tra nộp bài | Quốc | Timeline |
+| DEC-013 | 2026-11-11 | Nâng agent lên phương án A của DEC-005: agent chạy nền trong backend (`AGENT_AUTO=true`) tự quét trạng thái contract và tự verify + `attest()` khi đủ bằng chứng. Frontend đăng ký URI qua `POST /trade/{id}/uris`: bằng chứng phải khớp hash on-chain, ảnh niêm yết phải có chữ ký ví của seller. Endpoint thủ công `/verify-evidence` giữ làm dự phòng. Không đổi contract | CONFIRMED | Đúng nghĩa "AI Agent" của track; không bên nào trì hoãn được bằng cách không bấm nút; tắt cờ là quay về hành vi cũ. Quét trạng thái thay vì nghe event để không sót việc khi restart / RPC công cộng rớt | Quốc | `backend/auto_agent.py`, `backend/attest_service.py`, `frontend/components/AgentStatusCard.tsx` |
 
 ## Template thêm quyết định
 
