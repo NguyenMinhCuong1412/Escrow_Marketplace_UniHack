@@ -1,71 +1,36 @@
 # UniHack 2026 — Escrow Marketplace (Avalanche dApp)
 
 ## Tóm tắt
+Marketplace escrow cho đồ sưu tầm trên Avalanche. Bằng chứng giao dịch (ảnh đóng gói / video unbox) được AI xác thực tự động bằng pipeline pHash + ORB + OCR nonce (`attest()`). Track: AI Agents and Security.
 
-Hackathon dApp trên Avalanche — marketplace escrow cho đồ sưu tầm. Bằng chứng giao dịch (ảnh đóng gói / video unbox) được **AI xác thực tự động** bằng pipeline pHash + ORB + OCR nonce. Track: **AI Agents and Security**.
-
-## Team
-
-| Thành viên | Vai trò |
-|---|---|
-| Hứa Kiến Quốc | Team Lead — Computer Vision/Data Science |
-| Nguyễn Minh Cường | Thành viên |
-| Nguyễn Phú Nguyên Vũ | Thành viên |
-
-## Mốc thời gian
-
-- **Deadline nộp bài:** 21/11/2026 23:59 (giờ VN)
-- **Demo Day:** 30/11/2026
-- **Tiêu chí:** Technical 25% · Avalanche 25% · Creativity 15% · Impact 15% · Presentation 10% · UI/UX 10%
+## Team & Mốc thời gian
+- **Team:** Hứa Kiến Quốc (Team Lead — CV/DS), Nguyễn Minh Cường, Nguyễn Phú Nguyên Vũ.
+- **Mốc:** Nộp bài: 21/11/2026 23:59 (VN) · Demo Day: 30/11/2026.
+- **Tiêu chí:** Technical 25% · Avalanche 25% · Creativity 15% · Impact 15% · Presentation 10% · UI/UX 10%.
 
 ## Cấu trúc thư mục
-
 ```
-├── .agents/                  # Antigravity rules, skills & AGENTS.md
-├── CLAUDE.md                 # File này
-├── README.md                 # README dự án
-├── .agents/                  # Antigravity rules & skills
-│   ├── rules/                # Domain rules (product, arch, backend, contract, AI, UI, security, testing, git)
-│   └── skills/               # Reusable skills (implement-task, project-discovery, qa-review)
+├── .agents/
+│   ├── AGENTS.md             # Always-on project rules & role matrix
+│   ├── rules/                # Domain rules (10-90, 55-ai-authority.md)
+│   └── skills/               # Reusable skills (implement-task, qa-review, release-gate)
+├── CLAUDE.md                 # Hướng dẫn Claude Code
+├── README.md                 # Project README
 ├── docs/
-│   ├── context/              # Source of truth — project state
-│   │   ├── CURRENT_STATUS.md
-│   │   ├── DECISION_LOG.md
-│   │   ├── OPEN_QUESTIONS.md
-│   │   ├── PROJECT_BRIEF.md
-│   │   ├── BUSINESS_REQUIREMENTS.md
-│   │   ├── TECH_STACK.md
-│   │   ├── COMPETITION_CONTEXT.md
-│   │   ├── PRODUCT_VISION.md
-│   │   └── USER_PERSONAS.md
-│   ├── specs/                # Product specifications
-│   │   ├── FRONTEND_SPEC.md
-│   │   ├── L1_MODULE_SPEC.md
-│   │   ├── SLIDE_AND_VIDEO_SCRIPT.md
-│   │   └── VAI3_DYNAMIC_DEPOSIT_SPEC.md
-│   └── agent-ops/            # Agent workflow
-│       ├── MASTER_DISPATCH.md     # ★ Entry point cho Antigravity
-│       ├── TASK_DISPATCH_PROMPT.md
-│       ├── QA_REVIEW_PROMPT.md
-│       ├── TASK_TEMPLATE.md
-│       ├── RELEASE_GATE_PROMPT.md
-│       ├── tasks/            # Task specifications (ESC-xxx.md)
-│       └── reports/          # Task reports (ESC-xxx-report.md)
+│   ├── context/              # Source of truth (DECISION_LOG, BUSINESS_REQUIREMENTS, ...)
+│   ├── specs/                # FRONTEND_SPEC, L1_MODULE_SPEC, ...
+│   └── agent-ops/            # MASTER_DISPATCH.md, TEST_MATRIX.md, RISK_REGISTER.md, tasks/, reports/
 ├── backend/                  # FastAPI + AI pipeline integration
 ├── contracts/                # Solidity (Foundry)
-├── ai-pipeline/              # pHash + ORB + OCR + CLIP
-└── frontend/                 # Next.js (chưa tạo, Phase 4A)
+├── ai-pipeline/              # pHash + ORB + OCR + QR nonce (CLIP tuỳ chọn, mặc định HSV histogram)
+└── frontend/                 # Next.js 14 + wagmi/viem
 ```
 
-## Workflow
-
-- **Antigravity** (engineering): Đọc `docs/agent-ops/MASTER_DISPATCH.md` → tìm Phase → đọc task spec → thực hiện → ghi report.
-- **Cowork** (PM/QA): Đọc report → review theo `docs/agent-ops/QA_REVIEW_PROMPT.md` → ACCEPT/CHANGES_REQUESTED/BLOCKED.
-- **Project Owner** (user): Dispatch phase → chờ report → gửi review → merge branch.
+## Workflow & Phân quyền
+- **Phân quyền:** Tuân thủ role matrix tại `AGENTS.md §2a`. Claude Code là engineering agent ngang hàng Antigravity theo Task Spec (`READY`).
+- **Thực hiện task:** Đọc `docs/agent-ops/MASTER_DISPATCH.md` → tìm task `READY` → thực hiện trong worktree riêng → viết report `docs/agent-ops/reports/`.
+- **Review & Merge:** Cowork review theo `qa-review` skill; chỉ Project Owner mới có quyền merge.
 
 ## Quy tắc
-
-- Ưu tiên **tối đa hóa điểm** theo tiêu chí chấm.
-- Nhắc deadline khi liên quan.
-- Giữ code **đủ gọn** cho timeline 30 ngày.
-- Khi cần thông tin chi tiết, đọc file trong `docs/context/` — không hỏi lại user.
+- Ưu tiên tối đa hóa điểm theo tiêu chí chấm; nhắc deadline khi liên quan; giữ code đủ gọn.
+- Khi cần thông tin, đọc `docs/context/` theo precedence `AGENTS.md §0`; nếu nguồn mâu thuẫn hoặc thiếu quyết định → hỏi Owner.
