@@ -548,3 +548,254 @@ class TestListingBindingUnit:
         })
         assert r_no_ev.status_code == 409
         assert "Chưa đủ bằng chứng" in r_no_ev.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# TASK FREEZE-001: Backend Fail-Closed Guard (AC-01 through AC-07)
+# ---------------------------------------------------------------------------
+
+class TestFreeze001BackendFailClosed:
+    def test_ac01_insecure_reasons_pure_function(self, tmp_path):
+        """AC-01: insecure_reasons returns [] on chain 31337, detects unsafe configs on non-31337."""
+        s_unsafe = _settings(tmp_path, attest_api_key=None, allow_local_hosts=True, enforce_evidence_hash=False)
+        # On anvil chain 31337, always safe (returns [])
+        assert svc.insecure_reasons(s_unsafe, 31337) == []
+
+        # On non-31337 (e.g. Fuji 43113)
+        # 1. Empty key
+        s_no_key = _settings(tmp_path, attest_api_key=None, allow_local_hosts=False, enforce_evidence_hash=True)
+        r1 = svc.insecure_reasons(s_no_key, 43113)
+        assert r1 == ["ATTEST_API_KEY is empty"]
+
+        # 2. Allow local hosts
+        s_local = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=True, enforce_evidence_hash=True)
+        r2 = svc.insecure_reasons(s_local, 43113)
+        assert r2 == ["ALLOW_LOCAL_HOSTS is True"]
+
+        # 3. Enforce evidence hash is False
+        s_no_hash = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=False, enforce_evidence_hash=False)
+        r3 = svc.insecure_reasons(s_no_hash, 43113)
+        assert r3 == ["ENFORCE_EVIDENCE_HASH is False"]
+
+        # 4. All unsafe flags
+        r_all = svc.insecure_reasons(s_unsafe, 43113)
+        assert len(r_all) == 3
+
+        # 5. Fully safe config on 43113
+        s_safe = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=False, enforce_evidence_hash=True)
+        assert svc.insecure_reasons(s_safe, 43113) == []
+
+    def test_ac02_chain43113_empty_key_verify_evidence_returns_503(self, tmp_path):
+        """AC-02: chain 43113 + empty key -> POST /verify-evidence returns 503 INSECURE_CONFIG, send_attest not called."""
+        class MockFujiClient:
+            attest_called = False
+            def chain_id(self):
+                return 43113
+            def get_trade(self, tid):
+                return type("T", (), {
+                    "exists": True,
+                    "state": svc.TradeState.AwaitingEvidence,
+                    "seller_evidence_hash": svc.evidence_hash_of("ipfs://QmSeller"),
+                    "buyer_evidence_hash": svc.evidence_hash_of("ipfs://QmBuyer"),
+                })()
+            def send_attest(self, *a, **kw):
+                self.attest_called = True
+                return "0xFakeTx"
+
+        mock_client = MockFujiClient()
+        s = _settings(tmp_path, attest_api_key=None, allow_local_hosts=False, enforce_evidence_hash=True)
+        app = svc.create_app(s, client=mock_client)
+        client = TestClient(app)
+
+        r = client.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        })
+        assert r.status_code == 503
+        data = r.json()
+        assert data.get("error_code") == "INSECURE_CONFIG"
+        assert "INSECURE_CONFIG" in str(data.get("detail", ""))
+        assert mock_client.attest_called is False
+
+    def test_ac03_chain43113_unsafe_toggles_return_503(self, tmp_path):
+        """AC-03: chain 43113 + allow_local_hosts=True or enforce_evidence_hash=False -> 503."""
+        class MockFujiClient:
+            def chain_id(self):
+                return 43113
+            def get_trade(self, tid):
+                return type("T", (), {"exists": True, "state": svc.TradeState.AwaitingEvidence})()
+
+        # Test A: allow_local_hosts=True
+        s_local = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=True, enforce_evidence_hash=True)
+        app_local = svc.create_app(s_local, client=MockFujiClient())
+        client_local = TestClient(app_local)
+        r_local = client_local.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        }, headers={"X-API-Key": "valid-key"})
+        assert r_local.status_code == 503
+        assert r_local.json().get("error_code") == "INSECURE_CONFIG"
+
+        # Test B: enforce_evidence_hash=False
+        s_hash = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=False, enforce_evidence_hash=False)
+        app_hash = svc.create_app(s_hash, client=MockFujiClient())
+        client_hash = TestClient(app_hash)
+        r_hash = client_hash.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        }, headers={"X-API-Key": "valid-key"})
+        assert r_hash.status_code == 503
+        assert r_hash.json().get("error_code") == "INSECURE_CONFIG"
+
+    def test_ac04_chain43113_empty_key_uris_returns_503(self, tmp_path):
+        """AC-04: chain 43113 + empty key -> POST /trade/{id}/uris returns 503."""
+        class MockFujiClient:
+            def chain_id(self):
+                return 43113
+
+        s = _settings(tmp_path, attest_api_key=None, allow_local_hosts=False, enforce_evidence_hash=True)
+        app = svc.create_app(s, client=MockFujiClient())
+        client = TestClient(app)
+
+        r = client.post("/trade/1/uris", json={
+            "role": "listing",
+            "uri": "ipfs://QmListing",
+            "signature": "0x1234",
+        })
+        assert r.status_code == 503
+        assert r.json().get("error_code") == "INSECURE_CONFIG"
+
+    def test_ac05_chain31337_regression_and_chain43113_wrong_key(self, tmp_path):
+        """AC-05: chain 31337 + empty key does not 503 from guard; chain 43113 + valid config + wrong key -> 401."""
+        class MockAnvilClient:
+            def chain_id(self):
+                return 31337
+            def get_trade(self, tid):
+                return type("T", (), {"exists": True, "state": svc.TradeState.Created})()
+
+        # Anvil: empty key passes guard (reaches business logic 409)
+        s_anvil = _settings(tmp_path, attest_api_key=None, allow_local_hosts=True, enforce_evidence_hash=True)
+        app_anvil = svc.create_app(s_anvil, client=MockAnvilClient())
+        client_anvil = TestClient(app_anvil)
+        r_anvil = client_anvil.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        })
+        assert r_anvil.status_code != 503
+
+        # Fuji: valid config with wrong key returns 401
+        class MockFujiClient:
+            def chain_id(self):
+                return 43113
+
+        s_fuji = _settings(tmp_path, attest_api_key="secret-key", allow_local_hosts=False, enforce_evidence_hash=True)
+        app_fuji = svc.create_app(s_fuji, client=MockFujiClient())
+        client_fuji = TestClient(app_fuji)
+        r_fuji = client_fuji.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        }, headers={"X-API-Key": "wrong-key"})
+        assert r_fuji.status_code == 401
+        assert r_fuji.json() == {"detail": "Invalid or missing API key"}
+
+    def test_ac06_auto_agent_on_insecure_config(self, tmp_path):
+        """AC-06: Auto agent on insecure config does not call attest; /health.agent_error contains INSECURE_CONFIG."""
+        class MockReadyFujiClient:
+            attest_called = False
+            def chain_id(self):
+                return 43113
+            def next_trade_id(self):
+                return 2
+            def get_trade(self, tid):
+                return type("T", (), {
+                    "trade_id": 1,
+                    "exists": True,
+                    "state": svc.TradeState.AwaitingEvidence,
+                    "seller_evidence_hash": svc.evidence_hash_of("ipfs://QmSeller"),
+                    "buyer_evidence_hash": svc.evidence_hash_of("ipfs://QmBuyer"),
+                })()
+            def send_attest(self, *a, **kw):
+                self.attest_called = True
+                return "0xFakeTx"
+
+        mock_client = MockReadyFujiClient()
+        # Insecure on Fuji: key is None
+        s = _settings(tmp_path, attest_api_key=None, allow_local_hosts=False, enforce_evidence_hash=True)
+        app = svc.create_app(s, client=mock_client)
+        # Register URIs so trade is ready for auto agent
+        app.state.registry.set(1, "listing", "ipfs://QmListing")
+        app.state.registry.set(1, "seller", "ipfs://QmSeller")
+        app.state.registry.set(1, "buyer", "ipfs://QmBuyer")
+
+        # Call agent.tick()
+        app.state.agent.tick()
+
+        # send_attest was never called
+        assert mock_client.attest_called is False
+
+        # /health.agent_error contains INSECURE_CONFIG
+        client = TestClient(app)
+        r_health = client.get("/health")
+        assert r_health.status_code == 200
+        health_data = r_health.json()
+        assert "INSECURE_CONFIG" in (health_data.get("agent_error") or "")
+
+    def test_ac07_health_security_toggles_and_no_secret_leak(self, tmp_path):
+        """AC-07: /health contains all 5 security_toggles keys and does not leak secret key in body."""
+        secret_key = "super-secret-production-attest-key-12345"
+        class MockFujiClient:
+            agent_address = "0xAgent"
+            def chain_id(self):
+                return 43113
+            def agent_balance(self):
+                return 10**18
+            def onchain_agent(self):
+                return "0xAgent"
+            @property
+            def escrow(self):
+                return type("E", (), {"address": "0xEscrow"})()
+
+        s = _settings(
+            tmp_path,
+            attest_api_key=secret_key,
+            allow_local_hosts=False,
+            enforce_evidence_hash=True,
+            ipfs_gateway="https://my-custom-gw.pinata.cloud/ipfs/",
+        )
+        app = svc.create_app(s, client=MockFujiClient())
+        client = TestClient(app)
+
+        r = client.get("/health")
+        assert r.status_code == 200
+        data = r.json()
+
+        # Check security_toggles block
+        assert "security_toggles" in data
+        toggles = data["security_toggles"]
+        expected_keys = {
+            "api_key_set",
+            "allow_local_hosts",
+            "enforce_evidence_hash",
+            "ipfs_gateway_host",
+            "insecure_for_chain",
+        }
+        assert set(toggles.keys()) == expected_keys
+        assert toggles["api_key_set"] is True
+        assert toggles["allow_local_hosts"] is False
+        assert toggles["enforce_evidence_hash"] is True
+        assert toggles["ipfs_gateway_host"] == "my-custom-gw.pinata.cloud"
+        assert toggles["insecure_for_chain"] is False
+
+        # Verify secret key is never leaked in the response body
+        assert secret_key not in r.text
+
