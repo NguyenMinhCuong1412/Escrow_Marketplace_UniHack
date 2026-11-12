@@ -66,7 +66,7 @@ export const PendingWithdrawalBanner: React.FC = () => {
         <div className="flex items-center gap-2 font-medium">
           <Coins className="w-5 h-5 flex-shrink-0 text-amber-200" />
           <span>
-            Bạn có <strong className="underline underline-offset-2">{formatAvax(pendingAmount)} AVAX</strong> đang chờ rút từ các khoản hoàn cọc hoặc giải ngân!
+            Bạn có <strong className="underline underline-offset-2">{formatAvax(pendingAmount)} AVAX</strong> đang chờ rút từ các khoản hoàn cọc hoặc tiền bồi thường!
           </span>
         </div>
         <button

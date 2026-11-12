@@ -286,7 +286,7 @@ export default function AdminDisputePage() {
           <div className="text-xs text-slate-300">
             <p className="font-semibold text-rose-300">Quyền truy cập hạn chế</p>
             <p className="mt-0.5 text-slate-400">
-              Ví hiện tại (<span className="font-mono text-slate-200">{address}</span>) không phải là Owner của hợp đồng Escrow. Bạn có thể xem danh sách tranh chấp nhưng không thể ký lệnh giải ngân phán quyết.
+              Ví hiện tại (<span className="font-mono text-slate-200">{address}</span>) không phải là Owner của hợp đồng Escrow. Bạn có thể xem danh sách tranh chấp nhưng không thể ký lệnh thực thi phán quyết.
             </p>
             {contractOwner && (
               <p className="mt-1 text-slate-400">
@@ -588,7 +588,7 @@ export default function AdminDisputePage() {
                   ) : trade.state === 4 ? (
                     <div className="text-xs text-slate-400 flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                      Giao dịch đã được giải ngân và hoàn tất (Resolved).
+                      Giao dịch đã được phân bổ cọc và hoàn tất (Resolved).
                     </div>
                   ) : (
                     <div className="text-xs text-slate-500 flex items-center gap-2">

@@ -33,7 +33,7 @@
 Mọi chuỗi người dùng nhìn thấy đều mô tả đúng ba điểm:
 
 1. Escrow giữ **cọc hai bên**; tiền hàng thanh toán ngoài chuỗi.
-2. Luồng sạch **hoàn cọc** tự động sau khi AI attest và hết thời gian khiếu nại.
+2. Luồng sạch **hoàn cọc**: AI ghi nhận kết quả bằng `attest`, `DISPUTE_WINDOW` đã kết thúc, giao dịch không bị gắn cờ, không có khiếu nại (trạng thái vẫn là `Attested`), và bất kỳ địa chỉ nào cũng có thể gọi `resolveClean`.
 3. Tranh chấp do **trọng tài (owner hợp đồng)** xử lý.
 
 Câu chữ cụ thể do agent đề xuất trong report, giọng văn giữ nguyên, tiếng Việt.
@@ -49,6 +49,7 @@ Chỉ được sửa **literal chuỗi** (text JSX, toast, metadata) trong:
 - `frontend/components/TradeTimeline.tsx`
 - `frontend/components/PendingWithdrawalBanner.tsx`
 - `docs/agent-ops/reports/FREEZE-002-report.md` (tạo mới)
+- `docs/agent-ops/remediation/final-freeze/FREEZE-002-frontend-claim-alignment.md` (cập nhật Goal, Scope và Change Log theo phê duyệt của Project Owner trong quá trình remediation N-01/N-02)
 
 ## Out of scope – do not edit
 
@@ -113,3 +114,9 @@ git diff --name-only main...HEAD
 
 - **Reviewer:** Cowork (`qa-review`)
 - **Result:** —
+
+## Change Log
+
+- **2026-11-12 (Project Owner Approved):**
+  - Cập nhật Goal mục 2 để ghi nhận đầy đủ 4 điều kiện của `resolveClean`: AI `attest`, `DISPUTE_WINDOW` kết thúc, `!flagged`, và không có khiếu nại (trạng thái vẫn là `Attested`).
+  - Bổ sung chính file Task Spec này vào Scope được phép sửa nhằm đáp ứng yêu cầu quản trị của Project Owner và giải quyết dứt điểm các phát hiện N-01, N-02 từ đợt Re-QA Round 3 của Cowork.

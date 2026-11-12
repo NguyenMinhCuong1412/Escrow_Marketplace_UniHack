@@ -37,12 +37,12 @@ export default function HomePage() {
         <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white max-w-4xl mx-auto leading-tight">
           Mua bán đồ sưu tầm <br className="hidden sm:inline" />
           <span className="bg-gradient-to-r from-rose-500 via-red-400 to-amber-300 bg-clip-text text-transparent">
-            không cần trung gian
+            bảo vệ bằng tiền cọc
           </span>
         </h1>
 
         <p className="text-lg text-slate-300 max-w-2xl mx-auto leading-relaxed">
-          AI xác thực bằng chứng, hợp đồng tự giải ngân. Đảm bảo an toàn tài sản cho cả người mua và người bán trên mạng Avalanche.
+          Ký quỹ cọc hai bên. AI chỉ xác thực bằng chứng và ghi kết quả on-chain (attest). Khi hết thời gian khiếu nại, giao dịch không bị gắn cờ và không có khiếu nại, bất kỳ ai cũng có thể kích hoạt hoàn cọc; tranh chấp do trọng tài xử lý.
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
@@ -93,9 +93,9 @@ export default function HomePage() {
             <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
               <Cpu className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-semibold text-white">3. AI kiểm tra &amp; giải ngân</h3>
+            <h3 className="text-lg font-semibold text-white">3. AI xác thực bằng chứng</h3>
             <p className="text-sm text-slate-400 leading-relaxed">
-              AI thị giác đối chiếu ngoại quan sản phẩm với listing niêm yết trên IPFS; hợp đồng tự động release tiền và hoàn cọc khi hợp lệ.
+              AI thị giác đối chiếu ngoại quan sản phẩm với listing niêm yết trên IPFS và ký attest on-chain; khi hết thời gian khiếu nại mà giao dịch không bị gắn cờ và không có khiếu nại thì bất kỳ ai cũng có thể kích hoạt hoàn cọc hai bên (tiền hàng thanh toán ngoài chuỗi).
             </p>
           </div>
         </div>

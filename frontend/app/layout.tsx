@@ -7,7 +7,7 @@ import { Toaster } from 'sonner';
 
 export const metadata: Metadata = {
   title: 'Escrow Marketplace | AI-Verified Escrow Platform',
-  description: 'Mua bán đồ sưu tầm không cần trung gian — AI xác thực bằng chứng, hợp đồng tự giải ngân',
+  description: 'Sàn giao dịch đồ sưu tầm bảo vệ bằng tiền cọc hai bên — AI chỉ xác thực bằng chứng và ký attest on-chain; hết hạn khiếu nại, không bị gắn cờ và không có khiếu nại thì bất kỳ ai cũng có thể kích hoạt hoàn cọc; tranh chấp do trọng tài xử lý',
 };
 
 export default function RootLayout({

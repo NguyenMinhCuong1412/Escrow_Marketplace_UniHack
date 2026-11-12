@@ -154,8 +154,8 @@ export default function TradeDetailPage() {
       'resolveClean',
       [trade.id],
       0n,
-      'Đang ký giải ngân giao dịch...',
-      'Giải ngân thành công! Tiền hàng và cọc đã được chuyển.'
+      'Đang ký hoàn cọc giao dịch...',
+      'Hoàn cọc thành công! Tiền cọc hai bên đã được hoàn trả.'
     );
   };
 
@@ -643,7 +643,7 @@ export default function TradeDetailPage() {
                         disabled={isActionDisabled}
                         className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg active:scale-95 transition-all"
                       >
-                        Giải ngân thanh toán &amp; Hoàn cọc (Resolve Clean)
+                        Hoàn cọc hai bên (Resolve Clean)
                       </button>
                     )}
                   </div>
@@ -669,10 +669,10 @@ export default function TradeDetailPage() {
               <div className="p-4 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs space-y-2">
                 <p className="font-bold text-sm flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4" />
-                  Giao dịch hoàn tất thành công!
+                  Giao dịch đã kết thúc (Resolved)
                 </p>
                 <p className="text-[11px] text-teal-300/80 leading-relaxed">
-                  Tiền hàng và tiền cọc đã được giải ngân cho các bên theo đúng điều khoản hợp đồng. Điểm uy tín (reputation) của cả 2 bên đã được cộng thêm điểm.
+                  Tiền cọc đã được hoàn trả hoặc phân bổ theo kết quả xử lý (hoàn cọc luồng sạch hoặc phán quyết trọng tài). Tiền hàng thanh toán ngoài chuỗi. Điểm uy tín (reputation) được cập nhật theo kết quả.
                 </p>
               </div>
             )}
