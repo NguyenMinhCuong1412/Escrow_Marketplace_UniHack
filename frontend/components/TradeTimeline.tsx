@@ -18,7 +18,7 @@ export const TradeTimeline: React.FC<TradeTimelineProps> = ({ state, flagged }) 
     { id: 0, label: 'Khởi tạo & Ký cọc' },
     { id: 1, label: 'Bằng chứng & Nonce' },
     { id: 2, label: flagged ? 'AI cảnh báo' : 'AI Xác thực' },
-    { id: 4, label: 'Giải ngân & Hoàn tất' },
+    { id: 4, label: 'Hoàn cọc & Hoàn tất' },
   ];
 
   return (
