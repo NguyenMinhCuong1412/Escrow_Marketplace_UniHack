@@ -1,4 +1,5 @@
 # FULL PROJECT COMPLIANCE, QUALITY & EDGE-CASE AUDIT REPORT
+**KHÔNG dùng làm bằng chứng — xem REPORT_VALIDATION_AND_REMEDIATION_PLAN.md**
 
 **Project:** Escrow Marketplace (UniHack 2026)  
 **Lead Auditor:** Independent Senior Software Architect, Security Auditor & QA Engineer  
