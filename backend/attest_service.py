@@ -43,6 +43,7 @@ from urllib.parse import urlparse, urljoin
 import requests
 from fastapi import FastAPI, HTTPException, Request, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 from web3 import Web3
 
@@ -128,6 +129,48 @@ class Settings:
             if fallback.exists():
                 s.escrow_abi_path = fallback
         return s
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed Security Guard (FREEZE-001 / Rule 30 / Rule 70)
+# ---------------------------------------------------------------------------
+
+class InsecureConfigError(HTTPException):
+    def __init__(self, reasons: list[str]):
+        self.reasons = list(reasons)
+        self.error_code = "INSECURE_CONFIG"
+        super().__init__(
+            status_code=503,
+            detail={
+                "error_code": "INSECURE_CONFIG",
+                "message": f"Insecure configuration for chain: {', '.join(reasons)}",
+                "reasons": self.reasons,
+            },
+        )
+
+
+def insecure_reasons(settings: Settings, chain_id: Optional[int]) -> list[str]:
+    """Trả danh sách cấu hình không an toàn khi chain_id != 31337 (FREEZE-001 / Rule 30 / Rule 70).
+    Trả [] khi chain_id == 31337 (local anvil)."""
+    if chain_id == 31337:
+        return []
+    reasons: list[str] = []
+    if not settings.attest_api_key or not settings.attest_api_key.strip():
+        reasons.append("ATTEST_API_KEY is empty")
+    if settings.allow_local_hosts:
+        reasons.append("ALLOW_LOCAL_HOSTS is True")
+    if not settings.enforce_evidence_hash:
+        reasons.append("ENFORCE_EVIDENCE_HASH is False")
+    return reasons
+
+
+def extract_gateway_host(gw: str) -> str:
+    if not gw:
+        return ""
+    if "://" not in gw:
+        gw = "http://" + gw
+    from urllib.parse import urlsplit
+    return urlsplit(gw).hostname or gw
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +416,17 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
     trade_locks: dict[int, threading.Lock] = {}
     trade_locks_guard = threading.Lock()
 
+    @app.exception_handler(InsecureConfigError)
+    def insecure_config_handler(request: Request, exc: InsecureConfigError):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error_code": "INSECURE_CONFIG",
+                "detail": f"INSECURE_CONFIG: {', '.join(exc.reasons)}",
+                "reasons": exc.reasons,
+            },
+        )
+
     rate_limit_lock = threading.Lock()
     rate_limit_records: dict[str, list[float]] = {}
     RATE_LIMIT_WINDOW = 60.0
@@ -398,6 +452,20 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         log.info("Kết nối Escrow %s, agent %s", address, state["client"].agent_address)
         return state["client"]
 
+    def get_chain_id(c: EscrowClient) -> int:
+        if state.get("chain_id") is None:
+            if hasattr(c, "chain_id") and callable(c.chain_id):
+                state["chain_id"] = int(c.chain_id())
+            else:
+                state["chain_id"] = 31337
+        return state["chain_id"]
+
+    def check_security_guard(c: EscrowClient) -> None:
+        cid = get_chain_id(c)
+        reasons = insecure_reasons(settings, cid)
+        if reasons:
+            raise InsecureConfigError(reasons)
+
     def lock_for(trade_id: int) -> threading.Lock:
         with trade_locks_guard:
             return trade_locks.setdefault(trade_id, threading.Lock())
@@ -410,21 +478,45 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             info["tesseract"] = True
         except Exception:
             info["tesseract"] = False
+        cid = None
+        reasons: list[str] = []
         try:
             c = get_client()
-            info.update({
-                "chain_id": c.chain_id(),
-                "escrow": c.escrow.address,
-                "agent": c.agent_address,
-                "agent_balance_wei": str(c.agent_balance()),
-                "agent_matches_contract": c.onchain_agent().lower() == c.agent_address.lower(),
-            })
+            cid = get_chain_id(c)
+            reasons = insecure_reasons(settings, cid)
+            info["chain_id"] = cid
+            if hasattr(c, "escrow") and hasattr(c.escrow, "address"):
+                info["escrow"] = c.escrow.address
+            if hasattr(c, "agent_address"):
+                info["agent"] = c.agent_address
+            if hasattr(c, "agent_balance") and callable(c.agent_balance):
+                info["agent_balance_wei"] = str(c.agent_balance())
+            if hasattr(c, "onchain_agent") and callable(c.onchain_agent) and hasattr(c, "agent_address"):
+                info["agent_matches_contract"] = c.onchain_agent().lower() == c.agent_address.lower()
         except HTTPException as e:
             info.update({"ok": False, "error": e.detail})
         except Exception as e:
             info.update({"ok": False, "error": f"RPC error: {e}"})
-        info.update({"agent_auto": settings.agent_auto, "agent_running": agent.running,
-                     "agent_last_tick": agent.last_tick, "agent_error": agent.last_error})
+
+        gw_host = extract_gateway_host(settings.ipfs_gateway)
+        info["security_toggles"] = {
+            "api_key_set": bool(settings.attest_api_key and settings.attest_api_key.strip()),
+            "allow_local_hosts": bool(settings.allow_local_hosts),
+            "enforce_evidence_hash": bool(settings.enforce_evidence_hash),
+            "ipfs_gateway_host": gw_host,
+            "insecure_for_chain": bool(cid is not None and len(reasons) > 0),
+        }
+
+        agent_err = agent.last_error
+        if reasons and not agent_err:
+            agent_err = f"INSECURE_CONFIG: {', '.join(reasons)}"
+
+        info.update({
+            "agent_auto": settings.agent_auto,
+            "agent_running": agent.running,
+            "agent_last_tick": agent.last_tick,
+            "agent_error": agent_err,
+        })
         return info
 
     @app.get("/trade/{trade_id}")
@@ -499,6 +591,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         """Verification core shared by the manual endpoint and the autonomous agent (DEC-005 option A)."""
         started = time.time()
         c = get_client()
+        check_security_guard(c)
 
         # 3. Validate listing_image_url scheme (must be ipfs://)
         if not req.listing_image_url.startswith("ipfs://"):
@@ -612,10 +705,14 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
     # -----------------------------------------------------------------------
 
     def agent_verify(trade_id: int, uris: dict[str, str]) -> VerifyResponse:
-        return run_verification(VerifyRequest(
-            trade_id=trade_id, listing_image_url=uris["listing"],
-            seller_evidence_url=uris["seller"], buyer_evidence_url=uris["buyer"],
-        ))
+        try:
+            return run_verification(VerifyRequest(
+                trade_id=trade_id, listing_image_url=uris["listing"],
+                seller_evidence_url=uris["seller"], buyer_evidence_url=uris["buyer"],
+            ))
+        except InsecureConfigError as exc:
+            agent.last_error = f"INSECURE_CONFIG: {', '.join(exc.reasons)}"
+            raise
 
     agent = AutoAgent(get_client, registry, agent_verify, settings.agent_poll_seconds)
     app.state.agent = agent
@@ -641,14 +738,15 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         bằng chứng phải khớp hash đã neo on-chain, ảnh niêm yết phải có chữ ký ví seller."""
         check_api_key(x_api_key)
         check_rate_limit(request, "uris", 60)
+        c = get_client()
+        check_security_guard(c)
         if not body.uri.startswith("ipfs://"):
             raise HTTPException(422, "uri must be an ipfs:// URI")
         t = load_trade(trade_id)
         if body.role == "listing":
             if not body.signature:
                 raise HTTPException(422, "Thiếu chữ ký của seller cho ảnh niêm yết")
-            c = get_client()
-            msg = listing_message(c.chain_id(), c.escrow.address, trade_id, body.uri)
+            msg = listing_message(get_chain_id(c), c.escrow.address, trade_id, body.uri)
             try:
                 signer = recover_signer(msg, body.signature)
             except Exception:
