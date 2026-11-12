@@ -1,8 +1,13 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { getAgentStatus, type AgentStatus } from '@/lib/backend';
-import { Bot, CheckCircle2, Loader2, AlertTriangle, Clock, ChevronDown } from 'lucide-react';
+import { useAccount, useSignMessage } from 'wagmi';
+import { useTrade } from '@/hooks/useTrade';
+import { getAgentStatus, listingMessage, registerUri, type AgentStatus } from '@/lib/backend';
+import { chainId, escrowAddress } from '@/lib/contracts';
+import { getStoredListingUri, setStoredListingUri } from '@/lib/ipfs';
+import { Bot, CheckCircle2, Loader2, AlertTriangle, Clock, ChevronDown, FileCheck } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface AgentStatusCardProps {
   tradeId: bigint;
@@ -40,6 +45,48 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
   const [step, setStep] = useState(0);
   const [showManual, setShowManual] = useState(false);
   const notified = useRef(false);
+
+  const { address } = useAccount();
+  const { signMessageAsync } = useSignMessage();
+  const { trade } = useTrade(tradeId);
+  const isSeller = Boolean(address && trade && trade.seller.toLowerCase() === address.toLowerCase());
+
+  const [customListingUri, setCustomListingUri] = useState('');
+  const [isSigningListing, setIsSigningListing] = useState(false);
+
+  useEffect(() => {
+    const stored = getStoredListingUri(tradeId);
+    if (stored) setCustomListingUri(stored);
+  }, [tradeId]);
+
+  const handleSignListing = async () => {
+    const uriToSign = (customListingUri || getStoredListingUri(tradeId) || '').trim();
+    if (!uriToSign || !uriToSign.startsWith('ipfs://')) {
+      toast.error('Vui lòng nhập đường dẫn IPFS hợp lệ (ipfs://...) của ảnh niêm yết.');
+      return;
+    }
+    setIsSigningListing(true);
+    const toastId = toast.loading('Đang ký xác nhận ảnh niêm yết bằng ví...');
+    try {
+      const msg = listingMessage(chainId, escrowAddress, tradeId.toString(), uriToSign);
+      const signature = await signMessageAsync({ message: msg });
+      await registerUri({
+        trade_id: Number(tradeId),
+        role: 'listing',
+        uri: uriToSign,
+        signature,
+      });
+      setStoredListingUri(tradeId, uriToSign);
+      toast.success('Đã ký và đăng ký ảnh niêm yết thành công!', { id: toastId });
+      const updated = await getAgentStatus(tradeId);
+      setStatus(updated);
+    } catch (err: any) {
+      console.error('Sign listing failed:', err);
+      toast.error(`Ký xác nhận thất bại: ${err?.message || 'Lỗi ký'}`, { id: toastId });
+    } finally {
+      setIsSigningListing(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -95,7 +142,51 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
     icon = <AlertTriangle className="w-4 h-4 text-amber-400" />;
     tone = 'border-amber-500/30 bg-amber-500/10 text-amber-200';
     title = 'Đã đủ bằng chứng on-chain, agent chưa nhận được đường dẫn file';
-    body = `Còn thiếu: ${status.missing_uris.map((r) => ROLE_LABEL[r] || r).join(', ')}. Bên nộp cần mở lại trang này, hoặc dùng phần chạy thủ công bên dưới.`;
+    const isMissingListing = status.missing_uris.includes('listing');
+    body = (
+      <div className="space-y-3">
+        <p>
+          Còn thiếu: {status.missing_uris.map((r) => ROLE_LABEL[r] || r).join(', ')}.
+        </p>
+        {isMissingListing && (
+          isSeller ? (
+            <div className="p-3.5 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-2.5">
+              <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
+                <FileCheck className="w-4 h-4 text-amber-400" />
+                <span>Ký xác nhận ảnh niêm yết (Người bán)</span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Để bảo vệ an toàn, AI Agent chỉ xác thực ảnh niêm yết do chính Người bán ký xác nhận bằng ví (EIP-191, không tốn gas).
+              </p>
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={customListingUri}
+                  onChange={(e) => setCustomListingUri(e.target.value)}
+                  placeholder="ipfs://Qm... (dán URI ảnh niêm yết)"
+                  disabled={isSigningListing}
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleSignListing}
+                  disabled={isSigningListing || !customListingUri.trim()}
+                  className="w-full py-2 px-3 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2"
+                >
+                  {isSigningListing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileCheck className="w-3.5 h-3.5" />}
+                  <span>Ký xác nhận ảnh niêm yết</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-slate-900/80 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <span>Chờ người bán ký xác nhận ảnh niêm yết</span>
+            </div>
+          )
+        )}
+      </div>
+    );
   } else if (phase === 'queued') {
     icon = <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />;
     tone = 'border-indigo-500/30 bg-indigo-500/10 text-indigo-200';

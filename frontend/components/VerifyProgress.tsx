@@ -51,22 +51,21 @@ export const VerifyProgress: React.FC<VerifyProgressProps> = ({
   const [currentStep, setCurrentStep] = useState(0);
 
   useEffect(() => {
-    const l = getStoredListingUri(tradeId) || '';
     const s = getStoredEvidenceUri(tradeId, 'seller') || '';
     const b = getStoredEvidenceUri(tradeId, 'buyer') || '';
-    setListingUri(l);
     setSellerUri(s);
     setBuyerUri(b);
-    // Trình duyệt khác với bên nộp → localStorage trống: lấy URI đã đăng ký ở backend.
-    if (!l || !s || !b) {
-      getRegisteredUris(tradeId)
-        .then((u) => {
-          if (!l && u.listing) setListingUri(u.listing);
-          if (!s && u.seller) setSellerUri(u.seller);
-          if (!b && u.buyer) setBuyerUri(u.buyer);
-        })
-        .catch(() => undefined);
-    }
+    // Luôn ưu tiên lấy URI ảnh niêm yết từ sổ URI backend (đã có chữ ký seller)
+    getRegisteredUris(tradeId)
+      .then((u) => {
+        if (u.listing) setListingUri(u.listing);
+        if (!s && u.seller) setSellerUri(u.seller);
+        if (!b && u.buyer) setBuyerUri(u.buyer);
+      })
+      .catch(() => {
+        const l = getStoredListingUri(tradeId) || '';
+        if (l) setListingUri(l);
+      });
   }, [tradeId]);
 
   // Step ticker during verification
@@ -90,8 +89,7 @@ export const VerifyProgress: React.FC<VerifyProgressProps> = ({
     const toastId = toast.loading('AI Agent đang phân tích thị giác máy tính...');
 
     try {
-      // Save any manual edits
-      setStoredListingUri(tradeId, listingUri.trim());
+      // Save manual edits for seller and buyer evidence
       setStoredEvidenceUri(tradeId, 'seller', sellerUri.trim());
       setStoredEvidenceUri(tradeId, 'buyer', buyerUri.trim());
 
@@ -151,14 +149,26 @@ export const VerifyProgress: React.FC<VerifyProgressProps> = ({
           </span>
           <div className="space-y-2">
             <div>
-              <label className="block text-[11px] text-slate-400 mb-1">Listing Image URI (ipfs://...):</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] text-slate-400">Listing Image URI (đã ký bởi seller - không thể sửa tay):</label>
+                {listingUri && (
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono">
+                    <CheckCircle2 className="w-3 h-3" /> Đã xác thực
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
                 value={listingUri}
-                onChange={(e) => setListingUri(e.target.value)}
-                placeholder="ipfs://Qm...listing"
-                className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-slate-200"
+                readOnly
+                placeholder="Chưa có ảnh niêm yết được seller ký xác nhận"
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-400 cursor-not-allowed select-all"
               />
+              {!listingUri && (
+                <p className="text-[10px] text-amber-400/90 mt-1">
+                  Người bán cần ký xác nhận ảnh niêm yết ở thẻ AI Agent bên trên trước khi có thể xác thực.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-[11px] text-slate-400 mb-1">Seller Packing URI (ipfs://...):</label>

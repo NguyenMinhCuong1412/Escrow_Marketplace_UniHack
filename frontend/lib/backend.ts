@@ -179,7 +179,7 @@ export interface AgentStatus {
  */
 export function listingMessage(chainId: number, escrow: string, tradeId: string | bigint | number, uri: string): string {
   return [
-    'TrustPact Escrow - xac nhan anh niem yet',
+    'Escrow Marketplace - xac nhan anh niem yet',
     `chain: ${chainId}`,
     `escrow: ${escrow.toLowerCase()}`,
     `trade: ${tradeId.toString()}`,

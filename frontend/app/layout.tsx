@@ -6,7 +6,7 @@ import { WrongChainBanner } from '@/components/WrongChainBanner';
 import { Toaster } from 'sonner';
 
 export const metadata: Metadata = {
-  title: 'Collectible Escrow | AI-Verified Escrow Marketplace',
+  title: 'Escrow Marketplace | AI-Verified Escrow Platform',
   description: 'Mua bán đồ sưu tầm không cần trung gian — AI xác thực bằng chứng, hợp đồng tự giải ngân',
 };
 
@@ -25,7 +25,7 @@ export default function RootLayout({
             {children}
           </main>
           <footer className="border-t border-slate-800/80 bg-slate-900/40 py-6 text-center text-xs text-slate-500">
-            <p>Collectible Escrow &copy; 2026 — AI-Assisted Smart Contract Escrow Platform on Avalanche Fuji.</p>
+            <p>Escrow Marketplace &copy; 2026 — AI-Assisted Smart Contract Escrow Platform on Avalanche Fuji.</p>
           </footer>
           <Toaster position="bottom-right" richColors theme="dark" />
         </Providers>

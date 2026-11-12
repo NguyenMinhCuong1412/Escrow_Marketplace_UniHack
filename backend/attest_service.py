@@ -521,6 +521,13 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             if trade.seller_evidence_hash == empty or trade.buyer_evidence_hash == empty:
                 raise HTTPException(409, "Chưa đủ bằng chứng on-chain từ cả 2 bên")
 
+            # Ràng buộc ảnh niêm yết với chữ ký seller trong sổ URI (SEC-01)
+            registered_listing = registry.get(req.trade_id).get("listing")
+            if not registered_listing:
+                raise HTTPException(409, "Chưa có ảnh niêm yết đã ký trong sổ URI, cần seller ký xác nhận")
+            if req.listing_image_url != registered_listing:
+                raise HTTPException(422, "listing_image_url không khớp ảnh niêm yết seller đã ký")
+
             # 5. Bằng chứng phải đúng cái đã neo on-chain
             if settings.enforce_evidence_hash:
                 if evidence_hash_of(req.seller_evidence_url) != trade.seller_evidence_hash:

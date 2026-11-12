@@ -37,7 +37,7 @@ export const Navbar: React.FC = () => {
               </div>
               <div className="flex flex-col">
                 <span className="font-bold text-base leading-tight tracking-tight text-slate-900 dark:text-white">
-                  Collectible Escrow
+                  Escrow Marketplace
                 </span>
                 <span className="text-[10px] text-slate-500 font-medium tracking-wider uppercase">
                   AI Attested · Avalanche
