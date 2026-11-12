@@ -76,7 +76,7 @@ def listing_message(chain_id: int, escrow_address: str, trade_id: int, uri: str)
     Gắn chain + địa chỉ contract + trade id → chữ ký không dùng lại được ở nơi khác.
     Frontend (lib/backend.ts) phải dựng ĐÚNG chuỗi này."""
     return (
-        "TrustPact Escrow - xac nhan anh niem yet\n"
+        "Escrow Marketplace - xac nhan anh niem yet\n"
         f"chain: {chain_id}\n"
         f"escrow: {escrow_address.lower()}\n"
         f"trade: {trade_id}\n"

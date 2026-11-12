@@ -198,7 +198,7 @@ export default function CreateTradePage() {
         await registerUri({ trade_id: Number(createdTradeId), role: 'listing', uri: listingUri, signature });
       } catch (regErr) {
         console.warn('Register listing URI failed:', regErr);
-        toast.warning('Chưa đăng ký được ảnh niêm yết với AI Agent — vẫn có thể xác thực thủ công.', { duration: 6000 });
+        toast.warning('Chưa ký xác nhận ảnh niêm yết — bạn có thể ký lại ở trang chi tiết giao dịch.', { duration: 6000 });
       }
 
       toast.success(`Đã tạo giao dịch #${createdTradeId} thành công!`, { id: toastId });

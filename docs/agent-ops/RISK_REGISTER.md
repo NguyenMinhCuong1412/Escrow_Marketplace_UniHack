@@ -1,7 +1,7 @@
 # Project Risk Register – Escrow Marketplace
 
-> **Nguồn gốc baseline:** `docs/audit/AGENT_RULES_AUDIT_REPORT.md` (Audit 11/11/2026, baseline commit `7a0c5e9`).  
-> **Khởi tạo:** 2026-11-12 (Task ESC-090, Milestone 3) theo chỉ thị C-19 và AC-15.  
+> **Nguồn gốc baseline:** `docs/audit/AGENT_RULES_AUDIT_REPORT.md` (Audit 11/11/2026, baseline commit `7a0c5e9`).
+> **Khởi tạo:** 2026-11-12 (Task ESC-090, Milestone 3) theo chỉ thị C-19 và AC-15.
 > **Mục đích:** Theo dõi tập trung toàn bộ các rủi ro, lỗ hổng, sai lệch quy trình và tài liệu đã được kiểm toán; phân định rõ trách nhiệm xử lý và tiến độ khắc phục.
 
 ---

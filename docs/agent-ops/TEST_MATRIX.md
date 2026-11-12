@@ -1,7 +1,7 @@
 # Test Matrix — Escrow Marketplace
 
-> **Tài liệu chuẩn quản trị kiểm thử toàn diện cho Escrow Marketplace.**  
-> Nguồn: `docs/audit/AGENT_RULES_AUDIT_REPORT.md` (mục 3.D, mục 8 TST-01..08); `.agents/rules/80-testing.md`; Task Spec ESC-090 (C-18, AC-11).  
+> **Tài liệu chuẩn quản trị kiểm thử toàn diện cho Escrow Marketplace.**
+> Nguồn: `docs/audit/AGENT_RULES_AUDIT_REPORT.md` (mục 3.D, mục 8 TST-01..08); `.agents/rules/80-testing.md`; Task Spec ESC-090 (C-18, AC-11).
 > Tài liệu này là nguồn sự thật duy nhất về phân loại tầng rủi ro (Risk Tiers), ma trận kiểm thử theo module, lệnh thực thi chuẩn, điều kiện môi trường, và danh mục lỗ hổng kiểm thử đã biết (Known Gaps).
 
 ---
@@ -89,7 +89,7 @@ Khi chạy kiểm thử, agent và reviewer bắt buộc thực thi chính xác 
 1. **Foundry Toolchain (`forge`, `anvil`):**
    - **Phiên bản tối thiểu:** `forge 1.9.0` / `anvil 1.9.0` hoặc mới hơn.
    - **Đường dẫn nhận diện:** Nằm trong biến môi trường `PATH` hoặc tại `~/.foundry/bin/anvil` (được tự động dò tìm bởi `backend/tests/conftest.py:_find_bin`).
-   - **Hệ quả nếu thiếu:** 
+   - **Hệ quả nếu thiếu:**
      * `contracts/` hoàn toàn không thể biên dịch hoặc chạy test.
      * `backend/tests/conftest.py:L80` kích hoạt `pytest.skip("anvil chưa cài (Foundry)")`, khiến toàn bộ integration test suite bị skip.
    - **Điều kiện phụ thuộc Build Artifact:** Trước khi chạy `backend/tests/test_integration_anvil.py`, bắt buộc phải chạy `forge build` trong `contracts/` để sinh `contracts/out/Escrow.sol/Escrow.json` và `contracts/out/CollectibleToken.sol/CollectibleToken.json`. Nếu thiếu, `test_integration_anvil.py:L39` sẽ skip ngay lập tức.

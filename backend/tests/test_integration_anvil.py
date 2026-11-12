@@ -13,10 +13,13 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from web3 import Web3
+from eth_account import Account
+from eth_account.messages import encode_defunct
 
 import attest_service as svc
 import evidence_check as ec
 import synth
+from auto_agent import listing_message
 from chain import TradeState, evidence_hash_of
 
 ROOT = svc.ROOT_DIR
@@ -141,8 +144,22 @@ def _photo(item, seed, short, nonce_hex, **kw):
     raise AssertionError("OCR không đọc được nonce sau 6 lần thử")
 
 
+def _sign_listing(chain, key, tid, uri):
+    msg = listing_message(31337, chain.escrow.address, tid, uri)
+    return Account.sign_message(encode_defunct(text=msg), private_key=key).signature.hex()
+
+
+def _register_listing(c, chain, tid, uri, key=SELLER):
+    r = c.post(f"/trade/{tid}/uris", json={
+        "role": "listing",
+        "uri": uri,
+        "signature": _sign_listing(chain, key, tid, uri),
+    })
+    assert r.status_code == 200, r.text
+
+
 def _evidence(chain, file_server, tid, *, seller_nonce=True, buyer_nonce=True, item_seed=11,
-              buyer_item_seed=None, buyer_video=False, seller_img=None):
+              buyer_item_seed=None, buyer_video=False, seller_img=None, client=None):
     """Sinh ảnh với nonce thật của trade, publish qua gateway giả, neo keccak(url) on-chain."""
     nonce = Web3.to_hex(chain.trade(tid)[6])
     short = ec.short_nonce(nonce)
@@ -158,6 +175,8 @@ def _evidence(chain, file_server, tid, *, seller_nonce=True, buyer_nonce=True, i
                          _photo(buyer_item, tid + 50, short if buyer_nonce else None, nonce, brightness=0.9))
     chain.tx("seller", chain.escrow.functions.submitEvidence(tid, evidence_hash_of(seller)))
     chain.tx("buyer", chain.escrow.functions.submitEvidence(tid, evidence_hash_of(buyer)))
+    if client is not None:
+        _register_listing(client, chain, tid, listing)
     return {"trade_id": tid, "listing_image_url": listing, "seller_evidence_url": seller, "buyer_evidence_url": buyer}
 
 
@@ -175,7 +194,7 @@ def test_health(client, chain):
 def test_clean_trade_end_to_end(client, chain, file_server):
     s0, b0 = chain.balance("seller"), chain.balance("buyer")
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid)
+    req = _evidence(chain, file_server, tid, client=client)
 
     r = client.post("/verify-evidence", json=req)
     assert r.status_code == 200, r.text
@@ -213,7 +232,7 @@ def test_clean_trade_end_to_end(client, chain, file_server):
 
 def test_verify_again_after_attest_conflict(client, chain, file_server):
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid)
+    req = _evidence(chain, file_server, tid, client=client)
     assert client.post("/verify-evidence", json=req).status_code == 200
     r = client.post("/verify-evidence", json=req)
     assert r.status_code == 409 and "Attested" in r.json()["detail"]
@@ -221,7 +240,7 @@ def test_verify_again_after_attest_conflict(client, chain, file_server):
 
 def test_missing_buyer_nonce_flags_and_dispute_slashes(client, chain, file_server):
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid, buyer_nonce=False)
+    req = _evidence(chain, file_server, tid, buyer_nonce=False, client=client)
 
     body = client.post("/verify-evidence", json=req).json()
     assert body["report"]["flagged"] is True
@@ -243,7 +262,7 @@ def test_missing_buyer_nonce_flags_and_dispute_slashes(client, chain, file_serve
 
 def test_wrong_item_shipped_is_high_risk(client, chain, file_server):
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid, item_seed=21, buyer_item_seed=77)
+    req = _evidence(chain, file_server, tid, item_seed=21, buyer_item_seed=77, client=client)
     body = client.post("/verify-evidence", json=req).json()
     assert body["report"]["details"]["inliers_listing_buyer"] < ec.MIN_GOOD_INLIERS
     assert body["report"]["risk_score"] >= 50
@@ -251,7 +270,7 @@ def test_wrong_item_shipped_is_high_risk(client, chain, file_server):
 
 def test_buyer_video_evidence(client, chain, file_server):
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid, buyer_video=True, item_seed=31)
+    req = _evidence(chain, file_server, tid, buyer_video=True, item_seed=31, client=client)
     body = client.post("/verify-evidence", json=req).json()
     assert body["report"]["details"]["buyer_evidence_kind"] == "video"
     assert body["report"]["nonce_ok_buyer"] is True
@@ -263,12 +282,12 @@ def test_reused_photo_across_trades_flagged(client, chain, file_server):
     tid_a = chain.funded_trade()
     nonce_a = ec.short_nonce(Web3.to_hex(chain.trade(tid_a)[6]))
     old_photo = _photo(synth.make_item(41), 3, nonce_a, Web3.to_hex(chain.trade(tid_a)[6]))
-    req_a = _evidence(chain, file_server, tid_a, item_seed=41, seller_img=old_photo)
+    req_a = _evidence(chain, file_server, tid_a, item_seed=41, seller_img=old_photo, client=client)
     assert client.post("/verify-evidence", json=req_a).json()["report"]["flagged"] is False
 
     # Trade B: seller dùng lại đúng ảnh cũ (nonce cũ) → tái sử dụng + sai nonce
     tid_b = chain.funded_trade()
-    req_b = _evidence(chain, file_server, tid_b, item_seed=41, seller_img=old_photo)
+    req_b = _evidence(chain, file_server, tid_b, item_seed=41, seller_img=old_photo, client=client)
     rep = client.post("/verify-evidence", json=req_b).json()["report"]
     assert rep["phash_reused"] is True
     assert rep["nonce_ok_seller"] is False
@@ -277,7 +296,7 @@ def test_reused_photo_across_trades_flagged(client, chain, file_server):
 
 def test_evidence_url_must_match_onchain_hash(client, chain, file_server):
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid)
+    req = _evidence(chain, file_server, tid, client=client)
     tampered = dict(req, seller_evidence_url=req["listing_image_url"])  # đổi ảnh sau khi neo
     r = client.post("/verify-evidence", json=tampered)
     assert r.status_code == 422 and "sellerEvidenceHash" in r.json()["detail"]
@@ -286,7 +305,7 @@ def test_evidence_url_must_match_onchain_hash(client, chain, file_server):
 
 def test_dry_run_does_not_attest(client, chain, file_server):
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid)
+    req = _evidence(chain, file_server, tid, client=client)
     body = client.post("/verify-evidence", json=dict(req, dry_run=True, include_visual=False)).json()
     assert body["attested"] is False and body["tx_hash"] is None and body["match_visual_png_b64"] is None
     assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
@@ -319,7 +338,8 @@ def test_broken_image_422(client, chain, file_server):
     tid = chain.funded_trade()
     (root / f"t{tid}_broken.jpg").write_bytes(b"definitely not a jpeg")
     req = _evidence(chain, file_server, tid)
-    # listing không neo on-chain → thay listing bằng file hỏng
+    _register_listing(client, chain, tid, f"ipfs://t{tid}_broken.jpg")
+    # listing không neo on-chain → thay listing bằng file hỏng (đã đăng ký trong sổ URI)
     r = client.post("/verify-evidence", json=dict(req, listing_image_url=f"ipfs://t{tid}_broken.jpg"))
     assert r.status_code == 422
 
@@ -328,7 +348,7 @@ def test_wrong_agent_key_gives_502(chain, anvil, file_server, tmp_path):
     c = TestClient(svc.create_app(_settings(anvil, chain, file_server, tmp_path, agent_key=STRANGER)))
     assert c.get("/health").json()["agent_matches_contract"] is False
     tid = chain.funded_trade()
-    req = _evidence(chain, file_server, tid)
+    req = _evidence(chain, file_server, tid, client=c)
     r = c.post("/verify-evidence", json=dict(req, include_visual=False))
     assert r.status_code == 502 and "not agent" in r.json()["detail"]
 
@@ -336,16 +356,6 @@ def test_wrong_agent_key_gives_502(chain, anvil, file_server, tmp_path):
 # ---------------------------------------------------------------------------
 # Agent tự động (DEC-005 phương án A): sổ URI + vòng quét tự attest
 # ---------------------------------------------------------------------------
-
-from eth_account import Account  # noqa: E402
-from eth_account.messages import encode_defunct  # noqa: E402
-
-from auto_agent import listing_message  # noqa: E402
-
-
-def _sign_listing(chain, key, tid, uri):
-    msg = listing_message(31337, chain.escrow.address, tid, uri)
-    return Account.sign_message(encode_defunct(text=msg), private_key=key).signature.hex()
 
 
 def _register_all(c, chain, tid, req):
@@ -477,3 +487,38 @@ def test_nonce_qr_endpoint_roundtrip(client, chain):
     assert ec.read_qr_texts(img)[0] == ec.qr_payload(nonce)
     assert ec.check_nonce(img, nonce).method == "qr"
     assert client.get("/trade/99999/nonce-qr.png").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# TASK ESC-080: Integration Tests for AC-01, AC-02, AC-06
+# ---------------------------------------------------------------------------
+
+def test_ac01_unregistered_listing_gives_409(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid)  # client=None -> listing chưa được đăng ký trong sổ URI
+    r = client.post("/verify-evidence", json=req)
+    assert r.status_code == 409
+    assert "seller ký xác nhận" in r.json()["detail"]
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
+
+
+def test_ac02_mismatched_listing_gives_422(client, chain, file_server):
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, client=client)
+    spoofed = dict(req, listing_image_url="ipfs://QmSpoofedListing")
+    r = client.post("/verify-evidence", json=spoofed)
+    assert r.status_code == 422
+    assert "không khớp ảnh niêm yết" in r.json()["detail"]
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence
+
+
+def test_ac06_attack_scenario_listing_replaced_with_seller_evidence(client, chain, file_server):
+    # Kịch bản tấn công (SEC-01): bên thứ ba gọi verify thủ công với ảnh niêm yết là chính ảnh bằng chứng
+    # của seller (nhằm ép match 100%), trong khi seller đã ký ảnh niêm yết khác → 422, không attest
+    tid = chain.funded_trade()
+    req = _evidence(chain, file_server, tid, client=client)
+    attack_payload = dict(req, listing_image_url=req["seller_evidence_url"])
+    r = client.post("/verify-evidence", json=attack_payload)
+    assert r.status_code == 422
+    assert "không khớp ảnh niêm yết" in r.json()["detail"]
+    assert chain.trade(tid)[15] == TradeState.AwaitingEvidence

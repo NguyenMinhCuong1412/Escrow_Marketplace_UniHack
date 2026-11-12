@@ -14,6 +14,9 @@ export function getReadableError(error: unknown): string {
   if (/itemValue too small/i.test(errStr)) {
     return 'Giá trị món hàng quá nhỏ (cọc phải > 0).';
   }
+  if (/violator not a party/i.test(errStr)) {
+    return 'Bên bị xử phạt phải là Người bán, Người mua, hoặc địa chỉ 0.';
+  }
   if (/not a party/i.test(errStr)) {
     return 'Ví của bạn không thuộc giao dịch này.';
   }
@@ -25,9 +28,6 @@ export function getReadableError(error: unknown): string {
   }
   if (/already\s*deposited/i.test(errStr)) {
     return 'Bạn đã nạp cọc cho giao dịch này rồi.';
-  }
-  if (/violator not a party/i.test(errStr)) {
-    return 'Bên bị xử phạt phải là Người bán, Người mua, hoặc địa chỉ 0.';
   }
   if (/zero address/i.test(errStr)) {
     return 'Địa chỉ không được là 0x0.';

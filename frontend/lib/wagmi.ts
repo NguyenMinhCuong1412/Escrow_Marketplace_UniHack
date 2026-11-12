@@ -26,7 +26,7 @@ if (!envProjectId && typeof window !== 'undefined') {
 export const walletConnectProjectId = envProjectId || '3a8170812b534d0ff9d794f19a901d64';
 
 export const wagmiConfig = getDefaultConfig({
-  appName: 'Collectible Escrow',
+  appName: 'Escrow Marketplace',
   projectId: walletConnectProjectId,
   chains: [avalancheFuji, anvilChain],
   transports: {

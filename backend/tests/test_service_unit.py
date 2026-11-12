@@ -193,6 +193,7 @@ class TestSSRFProtection:
             def reputation_of(self, who): return 50
 
         app = svc.create_app(s, client=MockClient())
+        app.state.registry.set(1, "listing", "ipfs://QmListing")
         client = TestClient(app)
         r = client.post("/verify-evidence", json={
             "trade_id": 1,
@@ -366,6 +367,7 @@ class TestListingValidation:
             def get_trade(self, tid):
                 return type("T", (), {"exists": True})()
         app = svc.create_app(s, client=MockClient())
+        app.state.registry.set(1, "listing", "ipfs://QmListing")
         client = TestClient(app)
         r = client.post("/verify-evidence", json={
             "trade_id": 1,
@@ -382,6 +384,7 @@ class TestListingValidation:
             def get_trade(self, tid):
                 return type("T", (), {"exists": True})()
         app = svc.create_app(s, client=MockClient())
+        app.state.registry.set(1, "listing", "ipfs://QmListing")
         client = TestClient(app)
         r = client.post("/verify-evidence", json={
             "trade_id": 1,
@@ -401,6 +404,7 @@ class TestListingValidation:
                     "seller_evidence_hash": "0x00", "buyer_evidence_hash": "0x00",
                 })()
         app = svc.create_app(s, client=MockClient())
+        app.state.registry.set(1, "listing", "ipfs://QmListing")
         client = TestClient(app)
         r = client.post("/verify-evidence", json={
             "trade_id": 1,
@@ -416,3 +420,131 @@ class TestListingValidation:
         expected_hash = Web3.to_hex(Web3.keccak(raw_bytes)).lower()
         assert expected_hash.startswith("0x")
         assert len(expected_hash.replace("0x", "")) == 64
+
+
+# ---------------------------------------------------------------------------
+# TASK ESC-080: Listing Image Binding Unit Tests (AC-01, AC-02, AC-04)
+# ---------------------------------------------------------------------------
+
+class TestListingBindingUnit:
+    @pytest.fixture
+    def mock_ready_client(self):
+        class MockClient:
+            agent_address = "0xAgent"
+            attest_called = False
+            def get_trade(self, tid):
+                return type("T", (), {
+                    "exists": True,
+                    "state": svc.TradeState.AwaitingEvidence,
+                    "seller_evidence_hash": svc.evidence_hash_of("ipfs://QmSeller"),
+                    "buyer_evidence_hash": svc.evidence_hash_of("ipfs://QmBuyer"),
+                    "nonce": "0x" + "11" * 32,
+                    "item_value": 10**18,
+                    "seller": "0xSeller",
+                    "buyer": "0xBuyer",
+                })()
+            def reputation_of(self, who):
+                return 50
+            def send_attest(self, *args, **kwargs):
+                self.attest_called = True
+                return "0xFakeTxHash"
+        return MockClient()
+
+    def test_ac01_unregistered_listing_returns_409(self, tmp_path, mock_ready_client):
+        s = _settings(tmp_path)
+        app = svc.create_app(s, client=mock_ready_client)
+        client = TestClient(app)
+        r = client.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        })
+        assert r.status_code == 409
+        assert "seller ký xác nhận" in r.json()["detail"]
+        assert mock_ready_client.attest_called is False
+
+    def test_ac02_mismatched_listing_returns_422(self, tmp_path, mock_ready_client):
+        s = _settings(tmp_path)
+        app = svc.create_app(s, client=mock_ready_client)
+        app.state.registry.set(1, "listing", "ipfs://QmSignedListing")
+        client = TestClient(app)
+        r = client.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmSpoofedListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        })
+        assert r.status_code == 422
+        assert "không khớp ảnh niêm yết" in r.json()["detail"]
+        assert mock_ready_client.attest_called is False
+
+    def test_ac04_dry_run_enforces_listing_binding(self, tmp_path, mock_ready_client):
+        s = _settings(tmp_path)
+        app = svc.create_app(s, client=mock_ready_client)
+        client = TestClient(app)
+        # 1. Unregistered listing with dry_run=True -> 409
+        r1 = client.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+            "dry_run": True,
+        })
+        assert r1.status_code == 409
+        assert mock_ready_client.attest_called is False
+
+        # 2. Mismatched listing with dry_run=True -> 422
+        app.state.registry.set(1, "listing", "ipfs://QmSignedListing")
+        r2 = client.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmDifferent",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+            "dry_run": True,
+        })
+        assert r2.status_code == 422
+        assert mock_ready_client.attest_called is False
+
+    def test_ac04_error_ordering_preserved(self, tmp_path):
+        s = _settings(tmp_path)
+        class MockClient:
+            def get_trade(self, tid):
+                if tid == 404:
+                    return type("T", (), {"exists": False})()
+                if tid == 1:
+                    return type("T", (), {"exists": True, "state": svc.TradeState.Created})()
+                if tid == 2:
+                    empty = "0x" + "00" * 32
+                    return type("T", (), {
+                        "exists": True,
+                        "state": svc.TradeState.AwaitingEvidence,
+                        "seller_evidence_hash": empty,
+                        "buyer_evidence_hash": empty,
+                    })()
+                raise ValueError("unknown tid")
+
+        app = svc.create_app(s, client=MockClient())
+        client = TestClient(app)
+        # 404 checked before 409
+        r404 = client.post("/verify-evidence", json={
+            "trade_id": 404, "listing_image_url": "ipfs://a",
+            "seller_evidence_url": "ipfs://b", "buyer_evidence_url": "ipfs://c",
+        })
+        assert r404.status_code == 404
+
+        # Created state checked before listing
+        r_created = client.post("/verify-evidence", json={
+            "trade_id": 1, "listing_image_url": "ipfs://a",
+            "seller_evidence_url": "ipfs://b", "buyer_evidence_url": "ipfs://c",
+        })
+        assert r_created.status_code == 409
+        assert "Created" in r_created.json()["detail"]
+
+        # Missing evidence checked before listing
+        r_no_ev = client.post("/verify-evidence", json={
+            "trade_id": 2, "listing_image_url": "ipfs://a",
+            "seller_evidence_url": "ipfs://b", "buyer_evidence_url": "ipfs://c",
+        })
+        assert r_no_ev.status_code == 409
+        assert "Chưa đủ bằng chứng" in r_no_ev.json()["detail"]
