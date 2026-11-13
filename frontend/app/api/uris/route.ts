@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { verifySessionFromRequest } from '@/lib/auth-session';
 
 // Proxy server-side tới backend POST /trade/{id}/uris — báo cho AI Agent tự động biết
 // đường dẫn ipfs:// của ảnh niêm yết / bằng chứng. ATTEST_API_KEY chỉ đọc ở server.
@@ -15,6 +16,15 @@ function backendBaseUrl(): string {
 }
 
 export async function POST(request: Request) {
+  // 1. Kiểm tra session xác thực ví
+  const session = verifySessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json(
+      { detail: 'Yêu cầu đăng nhập. Vui lòng xác thực ví trước khi đăng ký URI.' },
+      { status: 401 }
+    );
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();

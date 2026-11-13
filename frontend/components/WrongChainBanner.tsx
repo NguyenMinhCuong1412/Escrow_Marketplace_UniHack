@@ -1,15 +1,20 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAccount, useSwitchChain } from 'wagmi';
 import { targetChain } from '@/lib/wagmi';
 import { AlertTriangle, ArrowRightLeft } from 'lucide-react';
 
 export const WrongChainBanner: React.FC = () => {
+  const [mounted, setMounted] = useState(false);
   const { isConnected, chain } = useAccount();
   const { switchChain, isPending } = useSwitchChain();
 
-  if (!isConnected || !chain) return null;
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || !isConnected || !chain) return null;
 
   const isWrongChain = chain.id !== targetChain.id;
 

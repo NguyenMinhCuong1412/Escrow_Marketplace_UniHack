@@ -12,7 +12,11 @@ import { useAuthSession } from '@/hooks/useAuthSession';
 export default function AuthPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const returnUrl = searchParams.get('returnUrl') || '/';
+  const rawReturnUrl = searchParams.get('returnUrl') || '/';
+  const returnUrl =
+    rawReturnUrl.startsWith('/') && !rawReturnUrl.startsWith('//') && !rawReturnUrl.startsWith('/auth')
+      ? rawReturnUrl
+      : '/';
   const localPageHref =
     returnUrl && returnUrl !== '/'
       ? `/auth/local?returnUrl=${encodeURIComponent(returnUrl)}`
@@ -70,17 +74,17 @@ export default function AuthPage() {
             <div className="flex items-center gap-2.5">
               <div
                 aria-hidden="true"
-                className="w-6 h-6 rounded-[6px] bg-[var(--primary-bg)] text-[var(--primary-fg)] flex items-center justify-center text-xs font-bold select-none"
+                className="w-6 h-6 rounded-lg bg-[#3458D4] text-white flex items-center justify-center text-xs font-bold shadow-sm select-none"
               >
                 E
               </div>
-              <span className="text-sm font-semibold tracking-tight text-[var(--text)]">
+              <span className="text-sm font-semibold tracking-tight text-[#17191F]">
                 Escrow Marketplace
               </span>
             </div>
 
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--text)]">
-              <span className="w-2 h-2 rounded-full bg-emerald-600" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] text-xs font-medium text-[#17191F] shadow-sm">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <span>Fuji Testnet</span>
             </span>
           </header>
@@ -88,8 +92,8 @@ export default function AuthPage() {
           {/* 2-Line Bold Heading */}
           <div className="space-y-1">
             <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight leading-snug">
-              <span className="block text-[var(--text)]">Mua bán đồ sưu tầm.</span>
-              <span className="block text-[var(--accent)]">Kiểm hàng bằng AI.</span>
+              <span className="block text-[#17191F]">Mua bán đồ sưu tầm.</span>
+              <span className="block text-[#3458D4]">Kiểm hàng bằng AI.</span>
             </h1>
           </div>
 
@@ -103,12 +107,12 @@ export default function AuthPage() {
                     reset();
                     openConnectModal();
                   }}
-                  disabled={isPending}
-                  className="w-full py-3 px-4 rounded-[10px] bg-[var(--primary-bg)] text-[var(--primary-fg)] font-semibold text-sm transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2"
+                  disabled={mounted ? isPending : false}
+                  className="w-full py-3 px-4 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-sm shadow-sm transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
                 >
                   {showConnectingBanner ? 'Đang kết nối ví...' : 'Kết nối ví'}
                 </button>
-                <p className="text-xs text-[var(--text-muted)]">
+                <p className="text-xs text-[#525866]">
                   Core, MetaMask, WalletConnect
                 </p>
               </div>
@@ -116,9 +120,9 @@ export default function AuthPage() {
               {showConnectError && connectError && (
                 <div
                   role="alert"
-                  className="p-3 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--text)] space-y-1.5"
+                  className="p-3 rounded-xl border border-red-200 bg-red-50 text-xs text-red-900 space-y-1.5 shadow-sm"
                 >
-                  <p className="font-medium text-[var(--accent)]">
+                  <p className="font-medium text-red-700">
                     {connectError.message.includes('User rejected')
                       ? 'Đã hủy yêu cầu kết nối ví.'
                       : connectError.message}
@@ -129,19 +133,19 @@ export default function AuthPage() {
                       reset();
                       openConnectModal();
                     }}
-                    className="text-xs font-medium text-[var(--accent)] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                    className="text-xs font-medium text-[#3458D4] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                   >
                     Thử lại
                   </button>
                 </div>
               )}
 
-              <div className="pt-2 border-t border-[var(--border)]">
-                <p className="text-sm text-[var(--text-muted)]">
+              <div className="pt-2 border-t border-[#E5E7EB]">
+                <p className="text-sm text-[#525866]">
                   Chưa có ví?{' '}
                   <Link
                     href={localPageHref}
-                    className="font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                    className="font-semibold text-[#3458D4] hover:text-[#2947B5] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                   >
                     Tạo ví ngay trên trình duyệt →
                   </Link>
@@ -151,29 +155,29 @@ export default function AuthPage() {
           ) : (
             <div className="space-y-5">
               {/* Connected Wallet Summary Surface */}
-              <div className="p-4 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] space-y-3 text-xs">
+              <div className="p-4 rounded-xl border border-[#E5E7EB] bg-[#FFFFFF] shadow-sm space-y-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[var(--text-muted)]">Địa chỉ ví</span>
+                  <span className="text-[#525866]">Địa chỉ ví</span>
                   <span
                     style={{ fontFamily: 'var(--font-mono)' }}
-                    className="font-semibold text-[var(--text)]"
+                    className="font-semibold text-[#17191F]"
                     title={address}
                   >
                     {address?.slice(0, 8)}...{address?.slice(-6)}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border)]">
-                  <span className="text-[var(--text-muted)]">Phương thức</span>
-                  <span className="font-medium text-[var(--text)]">
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E5E7EB]">
+                  <span className="text-[#525866]">Phương thức</span>
+                  <span className="font-medium text-[#17191F]">
                     {isLocalConnected ? 'Ví trên trình duyệt' : connector?.name || 'Ví Web3'}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border)]">
-                  <span className="text-[var(--text-muted)]">Mạng</span>
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E5E7EB]">
+                  <span className="text-[#525866]">Mạng</span>
                   {isCorrectNetwork ? (
-                    <span className="font-medium text-[var(--text)]">
+                    <span className="font-medium text-[#17191F]">
                       {chain?.name || targetChain.name} ({chain?.id || targetChain.id})
                     </span>
                   ) : (
@@ -181,7 +185,7 @@ export default function AuthPage() {
                       type="button"
                       onClick={() => switchChainAsync({ chainId: targetChain.id }).catch(() => {})}
                       disabled={isSwitchingChain}
-                      className="font-semibold text-[var(--accent)] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                      className="font-semibold text-[#3458D4] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                     >
                       {isSwitchingChain
                         ? 'Đang chuyển mạng...'
@@ -191,16 +195,16 @@ export default function AuthPage() {
                 </div>
 
                 {!isLocalConnected && (
-                  <div className="pt-2 border-t border-[var(--border)] space-y-2">
+                  <div className="pt-2 border-t border-[#E5E7EB] space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-[var(--text-muted)]">
+                      <span className="text-[#525866]">
                         Tài khoản ({availableAccounts.length})
                       </span>
                       <button
                         type="button"
                         onClick={handlePromptAccountFromExtension}
                         disabled={isSwitchingAccount}
-                        className="text-xs font-medium text-[var(--accent)] hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                        className="text-xs font-medium text-[#3458D4] hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                       >
                         {isSwitchingAccount ? 'Đang mở ví...' : 'Đổi tài khoản từ ví'}
                       </button>
@@ -217,10 +221,10 @@ export default function AuthPage() {
                               type="button"
                               onClick={() => switchAccount(accAddr)}
                               style={{ fontFamily: 'var(--font-mono)' }}
-                              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-[8px] text-xs border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] ${
                                 isSelected
-                                  ? 'bg-[var(--bg)] border-[var(--text)] text-[var(--text)] font-semibold'
-                                  : 'bg-transparent border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                                  ? 'bg-[#3458D4]/5 border-[#3458D4] text-[#17191F] font-semibold'
+                                  : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#525866] hover:text-[#17191F]'
                               }`}
                             >
                               <span>
@@ -241,13 +245,13 @@ export default function AuthPage() {
               {authError && (
                 <div
                   role="alert"
-                  className="p-3 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] text-xs flex items-start justify-between gap-2"
+                  className="p-3 rounded-xl border border-red-200 bg-red-50 text-xs flex items-start justify-between gap-2 shadow-sm"
                 >
-                  <span className="text-[var(--accent)]">{authError}</span>
+                  <span className="text-red-700">{authError}</span>
                   <button
                     type="button"
                     onClick={clearAuthError}
-                    className="text-[var(--text-muted)] hover:text-[var(--text)] font-medium cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded px-1"
+                    className="text-[#525866] hover:text-[#17191F] font-medium cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded px-1"
                   >
                     Đóng
                   </button>
@@ -263,25 +267,25 @@ export default function AuthPage() {
                     if (ok) router.push(returnUrl);
                   }}
                   disabled={isSigningIn}
-                  className="w-full py-3 px-4 rounded-[10px] bg-[var(--primary-bg)] text-[var(--primary-fg)] font-semibold text-sm transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2"
+                  className="w-full py-3 px-4 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-sm shadow-sm transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
                 >
                   {isSigningIn ? 'Đang chờ ký xác nhận trên ví...' : 'Ký xác nhận & Vào sàn'}
                 </button>
               ) : (
                 <Link
                   href={returnUrl}
-                  className="block w-full py-3 px-4 rounded-[10px] bg-[var(--primary-bg)] text-[var(--primary-fg)] font-semibold text-sm text-center transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2"
+                  className="block w-full py-3 px-4 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-sm text-center shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
                 >
                   Vào sàn giao dịch →
                 </Link>
               )}
 
               {/* Secondary links */}
-              <div className="flex items-center justify-between text-xs text-[var(--text-muted)] pt-1">
+              <div className="flex items-center justify-between text-xs text-[#525866] pt-1">
                 {isLocalConnected ? (
                   <Link
                     href={localPageHref}
-                    className="font-medium text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                    className="font-medium text-[#3458D4] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                   >
                     Quản lý ví trình duyệt →
                   </Link>
@@ -289,7 +293,7 @@ export default function AuthPage() {
                   <button
                     type="button"
                     onClick={() => openConnectModal()}
-                    className="hover:text-[var(--text)] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                    className="hover:text-[#17191F] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                   >
                     Đổi ví khác
                   </button>
@@ -298,7 +302,7 @@ export default function AuthPage() {
                 <button
                   type="button"
                   onClick={() => logout()}
-                  className="hover:text-[var(--accent)] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+                  className="hover:text-red-600 underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
                 >
                   Ngắt kết nối
                 </button>
@@ -308,8 +312,8 @@ export default function AuthPage() {
         </div>
 
         {/* Footer Honest Note */}
-        <footer className="pt-6 border-t border-[var(--border)]">
-          <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+        <footer className="pt-6 border-t border-[#E5E7EB]">
+          <p className="text-xs text-[#525866] leading-relaxed">
             Chúng tôi không bao giờ hỏi cụm từ khôi phục của bạn.
           </p>
         </footer>

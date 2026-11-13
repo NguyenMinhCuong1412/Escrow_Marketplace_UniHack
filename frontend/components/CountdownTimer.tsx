@@ -39,21 +39,21 @@ export const CountdownTimer: React.FC<CountdownTimerProps> = ({
   return (
     <div
       className={clsx(
-        'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors',
+        'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors shadow-sm',
         countdown.isExpired
-          ? 'bg-red-500/10 border-red-500/30 text-red-400'
+          ? 'bg-red-50 border-red-200 text-red-700'
           : isUrgent
-          ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 animate-pulse'
-          : 'bg-slate-800/80 border-slate-700 text-slate-300',
+          ? 'bg-[#F0B44D]/20 border-[#F0B44D]/50 text-[#8A5A00] animate-pulse'
+          : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#17191F]',
         className
       )}
     >
       {countdown.isExpired ? (
-        <AlertCircle className="w-4 h-4 text-red-400" />
+        <AlertCircle className="w-4 h-4 text-red-600" />
       ) : (
-        <Clock className={clsx('w-4 h-4', isUrgent ? 'text-amber-400' : 'text-slate-400')} />
+        <Clock className={clsx('w-4 h-4', isUrgent ? 'text-[#B47814]' : 'text-[#525866]')} />
       )}
-      {label && <span className="font-sans text-slate-400 font-normal">{label}:</span>}
+      {label && <span className="font-sans text-[#525866] font-normal">{label}:</span>}
       <span className="font-bold tracking-wider">{countdown.text}</span>
     </div>
   );

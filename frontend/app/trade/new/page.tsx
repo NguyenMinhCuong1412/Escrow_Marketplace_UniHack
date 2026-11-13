@@ -218,29 +218,29 @@ export default function CreateTradePage() {
     <div className="max-w-2xl mx-auto py-6 space-y-8">
       {/* Header */}
       <div className="space-y-2 text-center">
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
-          <Sparkles className="w-3.5 h-3.5" />
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-[#F0B44D]/20 text-[#8A5A00] border border-[#F0B44D]/50">
+          <Sparkles className="w-3.5 h-3.5 text-[#B47814]" />
           <span>Khởi tạo Hợp đồng Ký quỹ Đồ sưu tầm</span>
         </div>
-        <h1 className="text-3xl font-extrabold text-white tracking-tight">
+        <h1 className="text-3xl font-extrabold text-[#17191F] tracking-tight">
           Tạo Giao Dịch Mới
         </h1>
-        <p className="text-sm text-slate-400 max-w-lg mx-auto">
+        <p className="text-sm text-[#525866] max-w-lg mx-auto">
           Người bán tạo hợp đồng ký quỹ, đặt điều kiện thanh toán và tỷ lệ cọc 30% để đảm bảo cam kết với người mua.
         </p>
       </div>
 
       {/* Warning banner if disconnected or wrong chain */}
       {!isConnected && (
-        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+        <div className="p-4 rounded-xl bg-[#F0B44D]/15 border border-[#F0B44D]/50 text-[#8A5A00] text-xs flex items-center gap-2.5 shadow-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 text-[#B47814]" />
           <span>Vui lòng kết nối ví ở góc phải Navbar để bắt đầu tạo giao dịch.</span>
         </div>
       )}
 
       {isWrongChain && (
-        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2.5">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2.5 shadow-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600" />
           <span>Ví của bạn đang ở sai mạng. Vui lòng chuyển sang mạng {targetChain.name}.</span>
         </div>
       )}
@@ -248,13 +248,13 @@ export default function CreateTradePage() {
       {/* Form Card */}
       <form
         onSubmit={handleSubmit}
-        className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 sm:p-8 space-y-6 shadow-xl"
+        className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-6 sm:p-8 space-y-6 shadow-sm"
       >
         {/* Item Title */}
         <div className="space-y-2">
-          <label className="block text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-            <FileText className="w-4 h-4 text-indigo-400" />
-            Tên vật phẩm sưu tầm <span className="text-rose-500">*</span>
+          <label className="block text-xs font-semibold text-[#17191F] flex items-center gap-1.5">
+            <FileText className="w-4 h-4 text-[#3458D4]" />
+            Tên vật phẩm sưu tầm <span className="text-red-600">*</span>
           </label>
           <input
             type="text"
@@ -262,13 +262,13 @@ export default function CreateTradePage() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="VD: Thẻ bài Pokemon Charizard 1st Edition PSA 9"
-            className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="w-full px-4 py-2.5 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-sm text-[#17191F] placeholder-[#6B7280] shadow-sm focus:outline-none focus:border-[#3458D4] focus:ring-2 focus:ring-[#3458D4]/20 transition-all"
           />
         </div>
 
         {/* Item Description */}
         <div className="space-y-2">
-          <label className="block text-xs font-semibold text-slate-300">
+          <label className="block text-xs font-semibold text-[#17191F]">
             Mô tả tình trạng &amp; niêm phong
           </label>
           <textarea
@@ -276,50 +276,50 @@ export default function CreateTradePage() {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Mô tả chi tiết góc cạnh, bề mặt, số seri và phụ kiện đi kèm..."
-            className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="w-full px-4 py-2.5 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-sm text-[#17191F] placeholder-[#6B7280] shadow-sm focus:outline-none focus:border-[#3458D4] focus:ring-2 focus:ring-[#3458D4]/20 transition-all"
           />
         </div>
 
         {/* Listing Image Upload */}
         <div className="space-y-2">
-          <label className="block text-xs font-semibold text-slate-300 flex items-center justify-between">
+          <label className="block text-xs font-semibold text-[#17191F] flex items-center justify-between">
             <span className="flex items-center gap-1.5">
-              <ImageIcon className="w-4 h-4 text-indigo-400" />
-              Ảnh niêm yết gốc (Listing Image) <span className="text-rose-500">*</span>
+              <ImageIcon className="w-4 h-4 text-[#3458D4]" />
+              Ảnh niêm yết gốc (Listing Image) <span className="text-red-600">*</span>
             </span>
-            <span className="text-[11px] text-slate-500">JPG, PNG, WEBP (Tối đa 10MB)</span>
+            <span className="text-[11px] text-[#525866]">JPG, PNG, WEBP (Tối đa 10MB)</span>
           </label>
 
           {listingPreview ? (
-            <div className="relative rounded-xl border border-slate-700 bg-slate-950/80 p-3 flex items-center gap-4">
+            <div className="relative rounded-xl border border-[#E5E7EB] bg-[#F7F8FA] p-3 flex items-center gap-4">
               <img
                 src={listingPreview}
                 alt="Listing preview"
-                className="w-20 h-20 object-cover rounded-lg border border-slate-800"
+                className="w-20 h-20 object-cover rounded-lg border border-[#E5E7EB]"
               />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-white truncate">{listingFile?.name}</p>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-xs font-semibold text-[#17191F] truncate">{listingFile?.name}</p>
+                <p className="text-[11px] text-[#525866]">
                   {listingFile ? `${(listingFile.size / (1024 * 1024)).toFixed(2)} MB` : ''}
                 </p>
-                <p className="text-[11px] text-emerald-400 mt-1">✓ Sẵn sàng upload lên IPFS khi tạo hợp đồng</p>
+                <p className="text-[11px] text-emerald-700 font-medium mt-1">✓ Sẵn sàng upload lên IPFS khi tạo hợp đồng</p>
               </div>
               <button
                 type="button"
                 onClick={removeListingFile}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-rose-400 transition-colors"
+                className="p-1.5 rounded-lg bg-[#FFFFFF] hover:bg-red-50 border border-[#E5E7EB] text-[#525866] hover:text-red-600 transition-colors"
                 title="Xóa ảnh"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
           ) : (
-            <label className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl p-6 text-center cursor-pointer transition-colors bg-slate-950/40 block group space-y-2">
-              <UploadCloud className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 mx-auto transition-colors" />
-              <div className="text-xs text-slate-300 font-medium">
-                Kéo thả hoặc <span className="text-indigo-400 underline">chọn ảnh niêm yết</span>
+            <label className="border-2 border-dashed border-[#E5E7EB] hover:border-[#3458D4] rounded-xl p-6 text-center cursor-pointer transition-colors bg-[#F7F8FA] block group space-y-2">
+              <UploadCloud className="w-8 h-8 text-[#525866] group-hover:text-[#3458D4] mx-auto transition-colors" />
+              <div className="text-xs text-[#17191F] font-medium">
+                Kéo thả hoặc <span className="text-[#3458D4] font-semibold underline">chọn ảnh niêm yết</span>
               </div>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-[#525866]">
                 Ảnh này sẽ làm ảnh đối chiếu gốc cho AI khi so sánh với bằng chứng mở hộp / đóng gói
               </p>
               <input
@@ -334,13 +334,13 @@ export default function CreateTradePage() {
 
         {/* Buyer Address */}
         <div className="space-y-2">
-          <label className="block text-xs font-semibold text-slate-300 flex items-center justify-between">
+          <label className="block text-xs font-semibold text-[#17191F] flex items-center justify-between">
             <span className="flex items-center gap-1.5">
-              <User className="w-4 h-4 text-indigo-400" />
-              Địa chỉ ví Người mua (Buyer) <span className="text-rose-500">*</span>
+              <User className="w-4 h-4 text-[#3458D4]" />
+              Địa chỉ ví Người mua (Buyer) <span className="text-red-600">*</span>
             </span>
             {isValidBuyerAddress && (
-              <span className="text-[11px] text-emerald-400 font-mono">
+              <span className="text-[11px] text-emerald-700 font-mono font-semibold">
                 Reputation: {buyerReputation}/100
               </span>
             )}
@@ -351,21 +351,21 @@ export default function CreateTradePage() {
             value={buyerAddress}
             onChange={(e) => setBuyerAddress(e.target.value.trim())}
             placeholder="0x..."
-            className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="w-full px-4 py-2.5 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-sm font-mono text-[#17191F] placeholder-[#6B7280] shadow-sm focus:outline-none focus:border-[#3458D4] focus:ring-2 focus:ring-[#3458D4]/20 transition-all"
           />
           {buyerAddress && !isAddress(buyerAddress) && (
-            <p className="text-[11px] text-rose-400">Địa chỉ ví không hợp lệ (phải bắt đầu bằng 0x...)</p>
+            <p className="text-[11px] text-red-600 font-medium">Địa chỉ ví không hợp lệ (phải bắt đầu bằng 0x...)</p>
           )}
           {buyerAddress && address && buyerAddress.toLowerCase() === address.toLowerCase() && (
-            <p className="text-[11px] text-rose-400">Người mua không được là chính ví của bạn.</p>
+            <p className="text-[11px] text-red-600 font-medium">Người mua không được là chính ví của bạn.</p>
           )}
         </div>
 
         {/* Item Value & Live Deposit Preview */}
         <div className="space-y-2">
-          <label className="block text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-            <Coins className="w-4 h-4 text-amber-400" />
-            Giá trị thỏa thuận (AVAX) <span className="text-rose-500">*</span>
+          <label className="block text-xs font-semibold text-[#17191F] flex items-center gap-1.5">
+            <Coins className="w-4 h-4 text-[#B47814]" />
+            Giá trị thỏa thuận (AVAX) <span className="text-red-600">*</span>
           </label>
           <div className="relative">
             <input
@@ -376,22 +376,22 @@ export default function CreateTradePage() {
               value={itemValue}
               onChange={(e) => setItemValue(e.target.value)}
               placeholder="1.0"
-              className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors pr-16"
+              className="w-full px-4 py-2.5 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-sm font-mono text-[#17191F] placeholder-[#6B7280] shadow-sm focus:outline-none focus:border-[#3458D4] focus:ring-2 focus:ring-[#3458D4]/20 transition-all pr-16"
             />
-            <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-xs text-slate-400">
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-xs text-[#525866]">
               AVAX
             </span>
           </div>
 
           {/* Deposit Rule Preview */}
-          <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs space-y-1">
-            <div className="flex items-center justify-between text-slate-300">
+          <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB] text-xs space-y-1">
+            <div className="flex items-center justify-between text-[#17191F]">
               <span>Tiền cọc cam kết mỗi bên (30%):</span>
-              <span className="font-mono font-bold text-amber-400">
+              <span className="font-mono font-bold text-[#925E09]">
                 {depositPreview} AVAX
               </span>
             </div>
-            <p className="text-[11px] text-slate-500">
+            <p className="text-[11px] text-[#525866]">
               Cả Người bán và Người mua đều nạp {depositPreview} AVAX vào hợp đồng. Cọc sẽ được hoàn trả tự động sau khi giao dịch hoàn tất hoặc AI xác thực sạch.
             </p>
           </div>
@@ -402,7 +402,7 @@ export default function CreateTradePage() {
           <button
             type="submit"
             disabled={isSubmitDisabled}
-            className="w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-semibold shadow-lg shadow-red-500/20 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm"
+            className="w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold shadow-md shadow-[#3458D4]/20 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
           >
             {isSubmitting ? (
               <>

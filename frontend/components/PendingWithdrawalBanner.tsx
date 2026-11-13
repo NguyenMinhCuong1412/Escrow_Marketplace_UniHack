@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAccount, useReadContract, useWriteContract, usePublicClient } from 'wagmi';
 import { escrowAddress, escrowAbi } from '@/lib/contracts';
 import { formatAvax } from '@/lib/format';
@@ -9,10 +9,15 @@ import { Coins, ArrowDownToLine, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export const PendingWithdrawalBanner: React.FC = () => {
+  const [mounted, setMounted] = useState(false);
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const [isPending, setIsPending] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const { data: rawPending, refetch } = useReadContract({
     address: escrowAddress,
@@ -20,14 +25,14 @@ export const PendingWithdrawalBanner: React.FC = () => {
     functionName: 'pendingWithdrawals',
     args: address ? [address] : undefined,
     query: {
-      enabled: Boolean(isConnected && address && escrowAddress !== '0x0000000000000000000000000000000000000000'),
+      enabled: Boolean(mounted && isConnected && address && escrowAddress !== '0x0000000000000000000000000000000000000000'),
       refetchInterval: 6000,
     },
   });
 
   const pendingAmount = rawPending ? BigInt(rawPending as any) : 0n;
 
-  if (!isConnected || pendingAmount <= 0n) {
+  if (!mounted || !isConnected || pendingAmount <= 0n) {
     return null;
   }
 
@@ -61,10 +66,10 @@ export const PendingWithdrawalBanner: React.FC = () => {
   };
 
   return (
-    <div className="bg-gradient-to-r from-amber-600 to-rose-600 text-white px-4 py-2.5 shadow-lg border-b border-amber-400/30 animate-in slide-in-from-top">
+    <div className="bg-[#3458D4] text-white px-4 py-2.5 shadow-md border-b border-[#2947B5] animate-in slide-in-from-top">
       <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs sm:text-sm">
         <div className="flex items-center gap-2 font-medium">
-          <Coins className="w-5 h-5 flex-shrink-0 text-amber-200" />
+          <Coins className="w-5 h-5 flex-shrink-0 text-[#F0B44D]" />
           <span>
             Bạn có <strong className="underline underline-offset-2">{formatAvax(pendingAmount)} AVAX</strong> đang chờ rút từ các khoản hoàn cọc hoặc tiền bồi thường!
           </span>
@@ -73,7 +78,7 @@ export const PendingWithdrawalBanner: React.FC = () => {
           type="button"
           onClick={handleWithdraw}
           disabled={isPending}
-          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-white text-rose-700 font-bold text-xs hover:bg-amber-50 active:scale-95 transition-all shadow-md disabled:opacity-50 flex-shrink-0"
+          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-white text-[#3458D4] hover:bg-[#F7F8FA] font-bold text-xs active:scale-95 transition-all shadow-sm disabled:opacity-50 flex-shrink-0"
         >
           {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowDownToLine className="w-3.5 h-3.5" />}
           {isPending ? 'Đang rút...' : 'Rút tiền ngay'}

@@ -24,29 +24,29 @@ export const TradeTimeline: React.FC<TradeTimelineProps> = ({ state, flagged }) 
   return (
     <div className="w-full py-2">
       <div className="flex items-center justify-between relative">
-        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-full bg-slate-800 -z-0" />
+        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-full bg-[#E5E7EB] -z-0" />
 
         {steps.map((step, idx) => {
           const isCompleted = state > step.id || (step.id === 4 && isResolved);
           const isCurrent = state === step.id;
 
-          let stepClass = 'bg-slate-900 border-slate-700 text-slate-500';
+          let stepClass = 'bg-[#FFFFFF] border-[#E5E7EB] text-[#525866]';
           let icon = <span>{idx + 1}</span>;
 
           if (isCancelled && idx >= state) {
-            stepClass = 'bg-slate-900 border-slate-800 text-slate-600';
+            stepClass = 'bg-[#F7F8FA] border-[#E5E7EB] text-[#525866]';
           } else if (isCompleted) {
-            stepClass = 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-500/20';
+            stepClass = 'bg-emerald-600 border-emerald-500 text-white shadow-sm';
             icon = <Check className="w-4 h-4" />;
           } else if (isCurrent) {
             if (isDisputed && step.id === 2) {
               stepClass = 'bg-red-600 border-red-500 text-white animate-pulse';
               icon = <AlertTriangle className="w-4 h-4" />;
             } else if (flagged && step.id === 2) {
-              stepClass = 'bg-amber-600 border-amber-500 text-white';
+              stepClass = 'bg-[#F0B44D] border-[#D9901A] text-white';
               icon = <AlertTriangle className="w-4 h-4" />;
             } else {
-              stepClass = 'bg-indigo-600 border-indigo-400 text-white ring-4 ring-indigo-500/20';
+              stepClass = 'bg-[#3458D4] border-[#2947B5] text-white ring-4 ring-[#3458D4]/20';
               icon = <Clock className="w-4 h-4 animate-spin" />;
             }
           }
@@ -64,7 +64,7 @@ export const TradeTimeline: React.FC<TradeTimelineProps> = ({ state, flagged }) 
               <span
                 className={clsx(
                   'text-[11px] font-medium mt-2 text-center max-w-[80px] sm:max-w-none',
-                  isCurrent ? 'text-indigo-400 font-bold' : isCompleted ? 'text-slate-300' : 'text-slate-500'
+                  isCurrent ? 'text-[#3458D4] font-bold' : isCompleted ? 'text-[#17191F]' : 'text-[#525866]'
                 )}
               >
                 {step.label}
@@ -75,15 +75,15 @@ export const TradeTimeline: React.FC<TradeTimelineProps> = ({ state, flagged }) 
       </div>
 
       {isCancelled && (
-        <div className="mt-4 p-2.5 rounded-lg bg-gray-500/10 border border-gray-500/30 text-gray-400 text-xs flex items-center gap-2">
-          <XCircle className="w-4 h-4 flex-shrink-0" />
+        <div className="mt-4 p-2.5 rounded-lg bg-gray-50 border border-gray-200 text-gray-700 text-xs flex items-center gap-2">
+          <XCircle className="w-4 h-4 flex-shrink-0 text-gray-500" />
           <span>Giao dịch này đã bị hủy. Cọc đã được xử lý theo quy định của hợp đồng.</span>
         </div>
       )}
 
       {isDisputed && (
-        <div className="mt-4 p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+        <div className="mt-4 p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600" />
           <span>Giao dịch đang có tranh chấp khiếu nại. Chờ trọng tài (owner) xử lý.</span>
         </div>
       )}

@@ -239,20 +239,20 @@ export default function AdminDisputePage() {
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E5E7EB] pb-6">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500/20 to-indigo-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+            <div className="w-10 h-10 rounded-xl bg-[#3458D4]/10 border border-[#3458D4]/25 flex items-center justify-center text-[#3458D4]">
               <Scale className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+              <h1 className="text-2xl font-bold text-[#17191F] flex items-center gap-2">
                 Trọng tài & Xử lý Tranh chấp
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 font-mono font-medium">
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#F0B44D]/20 text-[#8A5A00] border border-[#F0B44D]/50 font-mono font-medium">
                   Admin Only
                 </span>
               </h1>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-[#525866] mt-0.5">
                 Xem xét bằng chứng, đánh giá AI và phán quyết phân chia ký quỹ bảo đảm
               </p>
             </div>
@@ -262,7 +262,7 @@ export default function AdminDisputePage() {
         <button
           onClick={refetchAll}
           disabled={isInitialLoading}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-750 text-xs font-medium text-slate-300 hover:text-white hover:border-slate-600 transition-colors self-start sm:self-auto"
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-xs font-medium text-[#17191F] hover:bg-[#F7F8FA] hover:border-[#3458D4]/40 shadow-sm transition-colors self-start sm:self-auto"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isInitialLoading ? 'animate-spin' : ''}`} />
           Làm mới
@@ -271,41 +271,41 @@ export default function AdminDisputePage() {
 
       {/* Access Permission Status Banner */}
       {!isConnected ? (
-        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-          <div className="text-xs text-slate-300">
-            <p className="font-semibold text-amber-300">Chưa kết nối ví Trọng tài</p>
-            <p className="mt-0.5 text-slate-400">
+        <div className="p-4 rounded-xl bg-[#F0B44D]/15 border border-[#F0B44D]/50 flex items-start gap-3 shadow-sm">
+          <AlertTriangle className="w-5 h-5 text-[#B47814] shrink-0 mt-0.5" />
+          <div className="text-xs text-[#784B06]">
+            <p className="font-semibold text-[#784B06]">Chưa kết nối ví Trọng tài</p>
+            <p className="mt-0.5 text-[#8A5A00]">
               Bạn cần kết nối ví sở hữu hợp đồng ({contractOwner ? `${contractOwner.slice(0, 6)}...${contractOwner.slice(-4)}` : 'Admin'}) để thực thi các phán quyết trọng tài on-chain.
             </p>
           </div>
         </div>
       ) : !isOwner ? (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-3">
-          <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-          <div className="text-xs text-slate-300">
-            <p className="font-semibold text-rose-300">Quyền truy cập hạn chế</p>
-            <p className="mt-0.5 text-slate-400">
-              Ví hiện tại (<span className="font-mono text-slate-200">{address}</span>) không phải là Owner của hợp đồng Escrow. Bạn có thể xem danh sách tranh chấp nhưng không thể ký lệnh thực thi phán quyết.
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3 shadow-sm">
+          <ShieldAlert className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="text-xs text-red-800">
+            <p className="font-semibold text-red-900">Quyền truy cập hạn chế</p>
+            <p className="mt-0.5 text-red-700">
+              Ví hiện tại (<span className="font-mono text-[#17191F]">{address}</span>) không phải là Owner của hợp đồng Escrow. Bạn có thể xem danh sách tranh chấp nhưng không thể ký lệnh thực thi phán quyết.
             </p>
             {contractOwner && (
-              <p className="mt-1 text-slate-400">
+              <p className="mt-1 text-red-700">
                 Địa chỉ Owner hợp pháp:{' '}
-                <span className="font-mono text-amber-300">{contractOwner}</span>
+                <span className="font-mono font-semibold text-[#925E09]">{contractOwner}</span>
               </p>
             )}
           </div>
         </div>
       ) : (
-        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-3">
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-3 shadow-sm">
           <div className="flex items-center gap-3">
-            <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+            <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
             <div className="text-xs">
-              <span className="font-semibold text-emerald-300">Đã xác thực quyền Trọng tài: </span>
-              <span className="text-slate-300 font-mono">{address}</span>
+              <span className="font-semibold text-emerald-800">Đã xác thực quyền Trọng tài: </span>
+              <span className="text-[#17191F] font-mono">{address}</span>
             </div>
           </div>
-          <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-medium">
+          <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-medium">
             Authorized Owner
           </span>
         </div>
@@ -313,18 +313,18 @@ export default function AdminDisputePage() {
 
       {/* Tabs & Stats */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="inline-flex p-1 rounded-xl bg-slate-900 border border-slate-800">
+        <div className="inline-flex p-1 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] shadow-sm">
           <button
             onClick={() => setActiveTab('disputed')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
               activeTab === 'disputed'
-                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30 shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-red-50 text-red-700 border border-red-200 shadow-sm'
+                : 'text-[#525866] hover:text-[#17191F]'
             }`}
           >
             <Gavel className="w-3.5 h-3.5" />
             Đang tranh chấp (Disputed)
-            <span className="px-1.5 py-0.2 rounded-full bg-rose-500/30 text-rose-200 text-[10px] font-mono">
+            <span className="px-1.5 py-0.2 rounded-full bg-red-100 text-red-800 text-[10px] font-mono">
               {disputedTrades.length}
             </span>
           </button>
@@ -333,13 +333,13 @@ export default function AdminDisputePage() {
             onClick={() => setActiveTab('flagged')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
               activeTab === 'flagged'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-[#F0B44D]/20 text-[#8A5A00] border border-[#F0B44D]/50 shadow-sm'
+                : 'text-[#525866] hover:text-[#17191F]'
             }`}
           >
             <ShieldAlert className="w-3.5 h-3.5" />
             AI Cảnh báo (Flagged)
-            <span className="px-1.5 py-0.2 rounded-full bg-amber-500/30 text-amber-200 text-[10px] font-mono">
+            <span className="px-1.5 py-0.2 rounded-full bg-[#F0B44D]/30 text-[#784B06] text-[10px] font-mono">
               {flaggedTrades.length}
             </span>
           </button>
@@ -348,41 +348,41 @@ export default function AdminDisputePage() {
             onClick={() => setActiveTab('all')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
               activeTab === 'all'
-                ? 'bg-slate-800 text-white border border-slate-700 shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-[#3458D4] text-white border border-[#3458D4] shadow-sm'
+                : 'text-[#525866] hover:text-[#17191F]'
             }`}
           >
             Tất cả giao dịch
-            <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300 text-[10px] font-mono">
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-[#F7F8FA] text-[#525866]'}`}>
               {allTrades.length}
             </span>
           </button>
         </div>
 
-        <div className="text-xs text-slate-400">
-          Tổng cộng: <span className="font-semibold text-white">{allTrades.length}</span> giao dịch trên hợp đồng
+        <div className="text-xs text-[#525866]">
+          Tổng cộng: <span className="font-semibold text-[#17191F]">{allTrades.length}</span> giao dịch trên hợp đồng
         </div>
       </div>
 
       {/* Trade List */}
       {isInitialLoading ? (
         <div className="py-20 text-center space-y-3">
-          <div className="inline-block w-8 h-8 border-2 border-rose-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-slate-400">Đang quét các giao dịch trên blockchain...</p>
+          <div className="inline-block w-8 h-8 border-2 border-[#3458D4] border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs text-[#525866]">Đang quét các giao dịch trên blockchain...</p>
         </div>
       ) : displayedTrades.length === 0 ? (
-        <div className="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-12 text-center space-y-3">
-          <div className="w-12 h-12 rounded-2xl bg-slate-800 text-slate-500 flex items-center justify-center mx-auto">
-            <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+        <div className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-12 text-center space-y-3 shadow-sm">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto">
+            <CheckCircle2 className="w-6 h-6 text-emerald-600" />
           </div>
-          <h3 className="text-sm font-semibold text-white">
+          <h3 className="text-sm font-semibold text-[#17191F]">
             {activeTab === 'disputed'
               ? 'Không có tranh chấp nào cần giải quyết'
               : activeTab === 'flagged'
               ? 'Không có giao dịch nào bị AI cảnh báo'
               : 'Chưa có giao dịch nào trên hợp đồng'}
           </h3>
-          <p className="text-xs text-slate-400 max-w-md mx-auto">
+          <p className="text-xs text-[#525866] max-w-md mx-auto">
             Hệ thống đang hoạt động ổn định. Các khiếu nại mới từ các bên giao dịch hoặc cảnh báo AI sẽ hiển thị tại đây để Trọng tài xử lý.
           </p>
         </div>
@@ -395,18 +395,18 @@ export default function AdminDisputePage() {
             return (
               <div
                 key={trade.id.toString()}
-                className={`rounded-2xl border p-5 transition-all ${
+                className={`rounded-2xl border p-5 transition-all shadow-sm ${
                   isDisputed
-                    ? 'border-rose-500/40 bg-gradient-to-br from-rose-950/20 via-slate-900 to-slate-900'
+                    ? 'border-red-200 bg-[#FFFFFF]'
                     : isAttestedFlagged
-                    ? 'border-amber-500/40 bg-gradient-to-br from-amber-950/20 via-slate-900 to-slate-900'
-                    : 'border-slate-800/80 bg-slate-900/60'
+                    ? 'border-[#F0B44D]/60 bg-[#FFFFFF]'
+                    : 'border-[#E5E7EB] bg-[#FFFFFF]'
                 }`}
               >
                 {/* Header of Item */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800/80">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E5E7EB]">
                   <div className="flex items-center gap-3">
-                    <span className="font-mono text-base font-bold text-white">
+                    <span className="font-mono text-base font-bold text-[#17191F]">
                       #{trade.id.toString()}
                     </span>
                     <StateBadge state={trade.state} flagged={trade.flagged} />
@@ -414,10 +414,10 @@ export default function AdminDisputePage() {
                       <span
                         className={`text-xs px-2 py-0.5 rounded-full font-mono font-medium border ${
                           trade.riskScore >= 60
-                            ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                            ? 'bg-red-50 text-red-700 border-red-200'
                             : trade.riskScore >= 30
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                            ? 'bg-[#F0B44D]/20 text-[#8A5A00] border-[#F0B44D]/50'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         }`}
                       >
                         AI Risk: {trade.riskScore}/100
@@ -428,16 +428,16 @@ export default function AdminDisputePage() {
                   <div className="flex items-center gap-2">
                     <Link
                       href={`/trade/${trade.id.toString()}`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium transition-colors"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7F8FA] hover:bg-[#E5E7EB]/60 border border-[#E5E7EB] text-[#17191F] text-xs font-medium transition-colors"
                     >
                       Chi tiết trade
                       <ExternalLink className="w-3 h-3" />
                     </Link>
                     <Link
                       href={`/trade/${trade.id.toString()}/report`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-medium transition-colors"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3458D4]/10 hover:bg-[#3458D4]/15 text-[#3458D4] border border-[#3458D4]/25 text-xs font-medium transition-colors"
                     >
-                      <FileSearch className="w-3 h-3 text-rose-400" />
+                      <FileSearch className="w-3 h-3 text-[#3458D4]" />
                       Xem AI Report
                     </Link>
                   </div>
@@ -446,41 +446,41 @@ export default function AdminDisputePage() {
                 {/* Details Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-4">
                   {/* Parties */}
-                  <div className="space-y-2 p-3.5 rounded-xl bg-slate-950/50 border border-slate-800/60">
-                    <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <div className="space-y-2 p-3.5 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
+                    <p className="text-[11px] font-semibold text-[#525866] uppercase tracking-wider">
                       Các bên tham gia
                     </p>
                     <div className="space-y-1.5 text-xs">
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Seller:</span>
+                        <span className="text-[#525866]">Seller:</span>
                         <AddressDisplay address={trade.seller} />
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Buyer:</span>
+                        <span className="text-[#525866]">Buyer:</span>
                         <AddressDisplay address={trade.buyer} />
                       </div>
                     </div>
                   </div>
 
                   {/* Escrow Value & Deposit */}
-                  <div className="space-y-2 p-3.5 rounded-xl bg-slate-950/50 border border-slate-800/60">
-                    <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <div className="space-y-2 p-3.5 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
+                    <p className="text-[11px] font-semibold text-[#525866] uppercase tracking-wider">
                       Giá trị & Tiền ký quỹ
                     </p>
                     <div className="space-y-1 text-xs">
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Giá trị hàng:</span>
-                        <span className="font-semibold text-white">
+                        <span className="text-[#525866]">Giá trị hàng:</span>
+                        <span className="font-semibold text-[#17191F]">
                           <AvaxAmount amountWei={trade.itemValue} />
                         </span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Mỗi bên cọc:</span>
-                        <span className="font-semibold text-amber-300">
+                        <span className="text-[#525866]">Mỗi bên cọc:</span>
+                        <span className="font-semibold text-[#925E09]">
                           <AvaxAmount amountWei={trade.depositRequired} />
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                      <div className="flex items-center justify-between text-[11px] text-[#525866] pt-0.5">
                         <span>Đã nạp:</span>
                         <span>
                           Seller: {trade.sellerDeposit >= trade.depositRequired ? '✓' : '✗'} | Buyer:{' '}
@@ -491,28 +491,28 @@ export default function AdminDisputePage() {
                   </div>
 
                   {/* Evidence & Hash Info */}
-                  <div className="space-y-2 p-3.5 rounded-xl bg-slate-950/50 border border-slate-800/60">
-                    <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <div className="space-y-2 p-3.5 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
+                    <p className="text-[11px] font-semibold text-[#525866] uppercase tracking-wider">
                       Bằng chứng & On-chain Hash
                     </p>
                     <div className="space-y-1 text-xs font-mono">
-                      <div className="flex items-center justify-between text-slate-400">
+                      <div className="flex items-center justify-between text-[#525866]">
                         <span>Nonce:</span>
-                        <span className="text-indigo-300">
+                        <span className="text-[#3458D4] font-semibold">
                           {trade.nonce ? `${trade.nonce.slice(0, 10)}...` : 'Chưa cấp'}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-slate-400">
+                      <div className="flex items-center justify-between text-[#525866]">
                         <span>Report Hash:</span>
-                        <span className="text-slate-300">
+                        <span className="text-[#17191F]">
                           {trade.reportHash && trade.reportHash !== '0x0000000000000000000000000000000000000000000000000000000000000000'
                             ? `${trade.reportHash.slice(0, 10)}...`
                             : 'Chưa có'}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-slate-400">
+                      <div className="flex items-center justify-between text-[#525866]">
                         <span>Flagged:</span>
-                        <span className={trade.flagged ? 'text-rose-400 font-bold' : 'text-slate-400'}>
+                        <span className={trade.flagged ? 'text-red-600 font-bold' : 'text-[#525866]'}>
                           {trade.flagged ? 'CÓ (High Risk)' : 'Không'}
                         </span>
                       </div>
@@ -521,15 +521,15 @@ export default function AdminDisputePage() {
                 </div>
 
                 {/* Dispute Actions Bar */}
-                <div className="pt-3 border-t border-slate-800/80">
+                <div className="pt-3 border-t border-[#E5E7EB]">
                   {isDisputed ? (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-rose-300 font-semibold flex items-center gap-1.5">
-                          <Gavel className="w-4 h-4 text-rose-400" />
+                        <span className="text-red-700 font-semibold flex items-center gap-1.5">
+                          <Gavel className="w-4 h-4 text-red-600" />
                           Hành động phán quyết Trọng tài:
                         </span>
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-[11px] text-[#525866]">
                           Quy tắc phạt: Bên vi phạm mất 5% cọc cho bên bị hại, -10 uy tín.
                         </span>
                       </div>
@@ -538,10 +538,10 @@ export default function AdminDisputePage() {
                         <button
                           onClick={() => setConfirmModal({ open: true, trade, action: 'seller' })}
                           disabled={isSubmitting || !isOwner}
-                          className="px-3.5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-semibold transition-all text-center flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
+                          className="px-3.5 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-800 text-xs font-semibold transition-all text-center flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
                         >
                           <span>Phạt Seller vi phạm</span>
-                          <span className="text-[10px] text-rose-400/80 font-normal">
+                          <span className="text-[10px] text-red-700 font-normal">
                             Hoàn cọc Buyer + 5% bồi thường
                           </span>
                         </button>
@@ -549,10 +549,10 @@ export default function AdminDisputePage() {
                         <button
                           onClick={() => setConfirmModal({ open: true, trade, action: 'buyer' })}
                           disabled={isSubmitting || !isOwner}
-                          className="px-3.5 py-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold transition-all text-center flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
+                          className="px-3.5 py-2.5 rounded-xl bg-[#F0B44D]/15 hover:bg-[#F0B44D]/25 border border-[#F0B44D]/50 text-[#784B06] text-xs font-semibold transition-all text-center flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
                         >
                           <span>Phạt Buyer vi phạm</span>
-                          <span className="text-[10px] text-amber-400/80 font-normal">
+                          <span className="text-[10px] text-[#8A5A00] font-normal">
                             Hoàn cọc Seller + 5% bồi thường
                           </span>
                         </button>
@@ -560,19 +560,19 @@ export default function AdminDisputePage() {
                         <button
                           onClick={() => setConfirmModal({ open: true, trade, action: 'split' })}
                           disabled={isSubmitting || !isOwner}
-                          className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 text-xs font-semibold transition-all text-center flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
+                          className="px-3.5 py-2.5 rounded-xl bg-[#F7F8FA] hover:bg-[#E5E7EB]/60 border border-[#E5E7EB] text-[#17191F] text-xs font-semibold transition-all text-center flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
                         >
                           <span>Hoà giải / Không ai sai</span>
-                          <span className="text-[10px] text-slate-400 font-normal">
+                          <span className="text-[10px] text-[#525866] font-normal">
                             Hoàn đủ 100% cọc hai bên (address 0)
                           </span>
                         </button>
                       </div>
                     </div>
                   ) : isAttestedFlagged ? (
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
-                      <div className="text-xs text-amber-200 flex items-center gap-2">
-                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-[#F0B44D]/15 border border-[#F0B44D]/50">
+                      <div className="text-xs text-[#784B06] flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-[#B47814] shrink-0" />
                         <span>
                           AI đã cắm cờ cảnh báo rủi ro. Bạn có thể kích hoạt đưa trade sang trạng thái Disputed để xử lý phán quyết.
                         </span>
@@ -580,18 +580,18 @@ export default function AdminDisputePage() {
                       <button
                         onClick={() => handleFileComplaint(trade.id)}
                         disabled={isSubmitting}
-                        className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold text-xs transition-colors shrink-0 disabled:opacity-50"
+                        className="px-3 py-1.5 rounded-lg bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-xs transition-colors shrink-0 disabled:opacity-50"
                       >
                         Chuyển sang Disputed (fileComplaint)
                       </button>
                     </div>
                   ) : trade.state === 4 ? (
-                    <div className="text-xs text-slate-400 flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <div className="text-xs text-[#525866] flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                       Giao dịch đã được phân bổ cọc và hoàn tất (Resolved).
                     </div>
                   ) : (
-                    <div className="text-xs text-slate-500 flex items-center gap-2">
+                    <div className="text-xs text-[#525866] flex items-center gap-2">
                       <Info className="w-4 h-4" />
                       Giao dịch đang tiến hành bình thường, chưa phát sinh tranh chấp.
                     </div>
@@ -605,22 +605,22 @@ export default function AdminDisputePage() {
 
       {/* Confirmation Modal */}
       {confirmModal.open && confirmModal.trade && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="w-full max-w-lg rounded-2xl bg-[#FFFFFF] border border-[#E5E7EB] p-6 space-y-5 shadow-xl">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-[#3458D4]/10 border border-[#3458D4]/25 flex items-center justify-center text-[#3458D4]">
                 <Gavel className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">Xác nhận Phán quyết Trọng tài</h3>
-                <p className="text-xs text-slate-400">Giao dịch #{confirmModal.trade.id.toString()}</p>
+                <h3 className="text-base font-bold text-[#17191F]">Xác nhận Phán quyết Trọng tài</h3>
+                <p className="text-xs text-[#525866]">Giao dịch #{confirmModal.trade.id.toString()}</p>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs text-slate-300">
+            <div className="p-4 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB] space-y-2 text-xs text-[#17191F]">
               <div className="flex justify-between">
-                <span className="text-slate-400">Hình thức phán quyết:</span>
-                <span className="font-semibold text-white">
+                <span className="text-[#525866]">Hình thức phán quyết:</span>
+                <span className="font-semibold text-[#17191F]">
                   {confirmModal.action === 'seller'
                     ? 'Phạt Seller vi phạm'
                     : confirmModal.action === 'buyer'
@@ -629,8 +629,8 @@ export default function AdminDisputePage() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Bên vi phạm (violator):</span>
-                <span className="font-mono text-amber-300">
+                <span className="text-[#525866]">Bên vi phạm (violator):</span>
+                <span className="font-mono text-[#925E09]">
                   {confirmModal.action === 'seller'
                     ? confirmModal.trade.seller
                     : confirmModal.action === 'buyer'
@@ -639,8 +639,8 @@ export default function AdminDisputePage() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Mức phạt (5% cọc):</span>
-                <span className="font-semibold text-rose-400">
+                <span className="text-[#525866]">Mức phạt (5% cọc):</span>
+                <span className="font-semibold text-red-600">
                   {confirmModal.action === 'split' ? (
                     '0 AVAX (hoàn đủ 100%)'
                   ) : (
@@ -648,8 +648,8 @@ export default function AdminDisputePage() {
                   )}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800/80">
-                Lệnh này sẽ gọi hàm <code className="text-rose-300 font-mono">resolveDispute</code> trên Smart Contract Escrow. Sau khi xác nhận trên blockchain, trạng thái trade sẽ chuyển sang <code className="text-emerald-300">Resolved</code> và không thể đảo ngược.
+              <p className="text-[11px] text-[#525866] pt-2 border-t border-[#E5E7EB]">
+                Lệnh này sẽ gọi hàm <code className="text-[#3458D4] font-mono font-semibold">resolveDispute</code> trên Smart Contract Escrow. Sau khi xác nhận trên blockchain, trạng thái trade sẽ chuyển sang <code className="text-emerald-700 font-semibold">Resolved</code> và không thể đảo ngược.
               </p>
             </div>
 
@@ -658,7 +658,7 @@ export default function AdminDisputePage() {
                 type="button"
                 disabled={isSubmitting}
                 onClick={() => setConfirmModal({ open: false, trade: null, action: 'split' })}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+                className="px-4 py-2 rounded-xl bg-[#F7F8FA] hover:bg-[#E5E7EB]/60 border border-[#E5E7EB] text-[#17191F] text-xs font-semibold transition-colors"
               >
                 Hủy bỏ
               </button>
@@ -681,7 +681,7 @@ export default function AdminDisputePage() {
                       : 'Hoà giải 50-50';
                   handleResolveDispute(t, violator as `0x${string}`, label);
                 }}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition-colors shadow-lg shadow-rose-900/30 flex items-center gap-2 disabled:opacity-50"
+                className="px-4 py-2 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white text-xs font-semibold transition-colors shadow-md shadow-[#3458D4]/20 flex items-center gap-2 disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <>

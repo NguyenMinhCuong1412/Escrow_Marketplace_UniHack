@@ -28,26 +28,26 @@ export const TradeList: React.FC<TradeListProps> = ({
 
   if (isLoading) {
     return (
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 text-center space-y-3">
-        <div className="inline-block w-8 h-8 border-2 border-rose-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-slate-400">Đang tải danh sách giao dịch từ Smart Contract...</p>
+      <div className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-8 text-center space-y-3 shadow-sm">
+        <div className="inline-block w-8 h-8 border-2 border-[#3458D4] border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-[#525866]">Đang tải danh sách giao dịch từ Smart Contract...</p>
       </div>
     );
   }
 
   if (trades.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/20 p-10 text-center space-y-4">
-        <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-400 flex items-center justify-center mx-auto">
+      <div className="rounded-2xl border border-dashed border-[#E5E7EB] bg-[#FFFFFF] p-10 text-center space-y-4 shadow-sm">
+        <div className="w-12 h-12 rounded-2xl bg-[#F7F8FA] border border-[#E5E7EB] text-[#525866] flex items-center justify-center mx-auto">
           <PackageOpen className="w-6 h-6" />
         </div>
         <div className="space-y-1">
-          <h4 className="text-base font-semibold text-white">Chưa có giao dịch</h4>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">{emptyMessage}</p>
+          <h4 className="text-base font-semibold text-[#17191F]">Chưa có giao dịch</h4>
+          <p className="text-xs text-[#525866] max-w-sm mx-auto">{emptyMessage}</p>
         </div>
         <Link
           href="/trade/new"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-semibold shadow-md active:scale-95 transition-all"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white text-xs font-semibold shadow-sm active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4]"
         >
           <PlusCircle className="w-4 h-4" />
           Tạo giao dịch mới
@@ -57,9 +57,9 @@ export const TradeList: React.FC<TradeListProps> = ({
   }
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl">
+    <div className="overflow-x-auto rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] shadow-sm">
       <table className="w-full text-left text-xs">
-        <thead className="bg-slate-950/80 text-slate-400 uppercase tracking-wider border-b border-slate-800">
+        <thead className="bg-[#F7F8FA] text-[#525866] uppercase tracking-wider border-b border-[#E5E7EB]">
           <tr>
             <th className="py-3.5 px-4 font-semibold">#ID</th>
             <th className="py-3.5 px-4 font-semibold">Vai trò</th>
@@ -71,7 +71,7 @@ export const TradeList: React.FC<TradeListProps> = ({
             <th className="py-3.5 px-4 font-semibold text-right">Chi tiết</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-800/80">
+        <tbody className="divide-y divide-[#E5E7EB]">
           {trades.map((trade) => {
             const isSeller = trade.seller.toLowerCase() === currentAddress;
             const isBuyer = trade.buyer.toLowerCase() === currentAddress;
@@ -91,22 +91,22 @@ export const TradeList: React.FC<TradeListProps> = ({
             return (
               <tr
                 key={trade.id.toString()}
-                className="hover:bg-slate-800/40 transition-colors group"
+                className="hover:bg-[#F7F8FA] transition-colors group"
               >
-                <td className="py-3.5 px-4 font-mono font-bold text-white">
+                <td className="py-3.5 px-4 font-mono font-bold text-[#17191F]">
                   #{trade.id.toString()}
                 </td>
                 <td className="py-3.5 px-4">
                   {isSeller ? (
-                    <span className="px-2 py-0.5 rounded font-semibold text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    <span className="px-2 py-0.5 rounded font-semibold text-[10px] bg-[#3458D4]/10 text-[#3458D4] border border-[#3458D4]/25">
                       Người bán
                     </span>
                   ) : isBuyer ? (
-                    <span className="px-2 py-0.5 rounded font-semibold text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    <span className="px-2 py-0.5 rounded font-semibold text-[10px] bg-[#F0B44D]/20 text-[#8A5A00] border border-[#F0B44D]/50">
                       Người mua
                     </span>
                   ) : (
-                    <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400">
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-[#F7F8FA] text-[#525866] border border-[#E5E7EB]">
                       Khách xem
                     </span>
                   )}
@@ -116,7 +116,7 @@ export const TradeList: React.FC<TradeListProps> = ({
                     <AddressDisplay address={partnerAddress} copyable={false} />
                     <Link
                       href={`/profile/${partnerAddress}`}
-                      className="text-[10px] text-indigo-400 hover:underline"
+                      className="text-[10px] text-[#3458D4] hover:underline"
                     >
                       (Hồ sơ)
                     </Link>
@@ -135,16 +135,16 @@ export const TradeList: React.FC<TradeListProps> = ({
                   {activeDeadline ? (
                     <CountdownTimer deadline={activeDeadline} label={deadlineLabel} />
                   ) : (
-                    <span className="text-slate-500">--</span>
+                    <span className="text-[#525866]">--</span>
                   )}
                 </td>
                 <td className="py-3.5 px-4 text-right">
                   <Link
                     href={`/trade/${trade.id.toString()}`}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-medium transition-all group-hover:border-slate-600 border border-transparent"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#FFFFFF] hover:bg-[#F7F8FA] text-[#17191F] text-xs font-medium transition-all border border-[#E5E7EB] shadow-sm"
                   >
                     Xem
-                    <ArrowRight className="w-3.5 h-3.5" />
+                    <ArrowRight className="w-3.5 h-3.5 text-[#525866]" />
                   </Link>
                 </td>
               </tr>
