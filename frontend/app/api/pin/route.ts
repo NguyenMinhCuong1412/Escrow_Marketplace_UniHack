@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'crypto';
+import { verifySessionFromRequest } from '@/lib/auth-session';
 
 // Route handler chạy phía server: PINATA_JWT KHÔNG BAO GIỜ được gửi xuống trình duyệt.
 export const runtime = 'nodejs';
@@ -12,6 +13,15 @@ const VIDEO_TYPES = ['video/mp4'];
 const PINATA_URL = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
 
 export async function POST(request: Request) {
+  // 1. Kiểm tra session xác thực ví để chống lạm dụng tải tệp rác
+  const session = verifySessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json(
+      { error: 'Yêu cầu đăng nhập. Vui lòng xác thực ví trước khi tải tệp lên.' },
+      { status: 401 }
+    );
+  }
+
   let file: File | null = null;
   try {
     const form = await request.formData();

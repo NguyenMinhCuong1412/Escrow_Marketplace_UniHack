@@ -34,7 +34,7 @@ export const AddressDisplay: React.FC<AddressDisplayProps> = ({
   return (
     <span
       className={clsx(
-        'inline-flex items-center gap-1.5 font-mono text-sm bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700',
+        'inline-flex items-center gap-1.5 font-mono text-sm bg-[#F7F8FA] px-2 py-0.5 rounded border border-[#E5E7EB] text-[#17191F]',
         className
       )}
       title={address}
@@ -44,10 +44,10 @@ export const AddressDisplay: React.FC<AddressDisplayProps> = ({
         <button
           type="button"
           onClick={handleCopy}
-          className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors p-0.5"
+          className="text-[#6B7280] hover:text-[#3458D4] transition-colors p-0.5"
           title="Sao chép địa chỉ"
         >
-          {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
         </button>
       )}
       {explorerLink && (
@@ -55,7 +55,7 @@ export const AddressDisplay: React.FC<AddressDisplayProps> = ({
           href={snowtraceUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-gray-400 hover:text-blue-500 transition-colors p-0.5"
+          className="text-[#6B7280] hover:text-[#3458D4] transition-colors p-0.5"
           title="Xem trên Snowtrace"
         >
           <ExternalLink className="w-3.5 h-3.5" />

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { verifySessionFromRequest } from '@/lib/auth-session';
 
 // Proxy server-side tới backend POST /verify-evidence.
 // ATTEST_API_KEY chỉ đọc ở server (không có tiền tố NEXT_PUBLIC_) => không lộ ra trình duyệt.
@@ -18,6 +19,15 @@ function isValidUri(v: unknown): v is string {
 }
 
 export async function POST(request: Request) {
+  // 1. Kiểm tra session xác thực ví để ngăn ngừa lạm dụng kích hoạt pipeline AI
+  const session = verifySessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json(
+      { detail: 'Yêu cầu đăng nhập. Vui lòng xác thực ví trước khi yêu cầu thẩm định.' },
+      { status: 401 }
+    );
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();

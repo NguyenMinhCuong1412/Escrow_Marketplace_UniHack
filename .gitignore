@@ -1,26 +1,32 @@
 # Environment & secrets
 .env
+.env.*
 *.env.local
+!.env.example
 
 # Python
 .venv/
 __pycache__/
 .pytest_cache/
 
-# Backend data
+# Backend
 backend/data/
 
-# Foundry build artifacts
-contracts/out/
-contracts/cache/
-contracts/broadcast/
-
-# Local-only deployment (anvil)
+# Foundry
+**/broadcast/
+**/cache/
+**/out/
+**/artifacts/
 contracts/deployments/31337.json
 
-# Node
-node_modules/
-.next/
+# Node.js / Next.js
+**/node_modules/
+**/.next/
+**/.turbo/
+**/.vercel/
+**/coverage/
+**/dist/
+*.tsbuildinfo
 
 # OS
 .DS_Store

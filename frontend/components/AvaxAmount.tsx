@@ -25,10 +25,10 @@ export const AvaxAmount: React.FC<AvaxAmountProps> = ({
   };
 
   return (
-    <span className={clsx('inline-flex items-center gap-1 text-red-600 dark:text-red-400', sizeClasses[size], className)}>
-      {showIcon && <Coins className={clsx(size === 'lg' ? 'w-5 h-5' : 'w-4 h-4')} />}
+    <span className={clsx('inline-flex items-center gap-1 text-[#17191F]', sizeClasses[size], className)}>
+      {showIcon && <Coins className={clsx('text-[#B47814]', size === 'lg' ? 'w-5 h-5' : 'w-4 h-4')} />}
       <span>{formatted}</span>
-      <span className="font-medium text-xs opacity-80">AVAX</span>
+      <span className="font-medium text-xs text-[#525866]">AVAX</span>
     </span>
   );
 };

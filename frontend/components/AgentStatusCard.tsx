@@ -139,8 +139,8 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
     title = 'Đang chờ hai bên nộp bằng chứng';
     body = 'Ngay khi cả Người bán và Người mua nộp xong, AI Agent sẽ tự bắt đầu phân tích — không cần ai bấm nút.';
   } else if (phase === 'waiting_uris') {
-    icon = <AlertTriangle className="w-4 h-4 text-amber-400" />;
-    tone = 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+    icon = <AlertTriangle className="w-4 h-4 text-[#B47814]" />;
+    tone = 'border-[#F0B44D]/50 bg-[#F0B44D]/15 text-[#8A5A00]';
     title = 'Đã đủ bằng chứng on-chain, agent chưa nhận được đường dẫn file';
     const isMissingListing = status.missing_uris.includes('listing');
     body = (
@@ -150,12 +150,12 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
         </p>
         {isMissingListing && (
           isSeller ? (
-            <div className="p-3.5 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-2.5">
-              <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
-                <FileCheck className="w-4 h-4 text-amber-400" />
+            <div className="p-3.5 rounded-xl bg-[#FFFFFF] border border-[#F0B44D]/50 space-y-2.5 shadow-sm">
+              <div className="flex items-center gap-2 text-[#8A5A00] font-semibold text-xs">
+                <FileCheck className="w-4 h-4 text-[#B47814]" />
                 <span>Ký xác nhận ảnh niêm yết (Người bán)</span>
               </div>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
+              <p className="text-[11px] text-[#525866] leading-relaxed">
                 Để bảo vệ an toàn, AI Agent chỉ xác thực ảnh niêm yết do chính Người bán ký xác nhận bằng ví (EIP-191, không tốn gas).
               </p>
               <div className="space-y-2">
@@ -165,13 +165,13 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
                   onChange={(e) => setCustomListingUri(e.target.value)}
                   placeholder="ipfs://Qm... (dán URI ảnh niêm yết)"
                   disabled={isSigningListing}
-                  className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full px-3 py-1.5 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] text-xs font-mono text-[#17191F] focus:outline-none focus:border-[#3458D4]"
                 />
                 <button
                   type="button"
                   onClick={handleSignListing}
                   disabled={isSigningListing || !customListingUri.trim()}
-                  className="w-full py-2 px-3 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2 px-3 rounded-lg bg-[#3458D4] hover:bg-[#2947B5] disabled:opacity-50 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
                   {isSigningListing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileCheck className="w-3.5 h-3.5" />}
                   <span>Ký xác nhận ảnh niêm yết</span>
@@ -179,8 +179,8 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
               </div>
             </div>
           ) : (
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
-              <Clock className="w-4 h-4 text-amber-400 flex-shrink-0" />
+            <div className="p-3 rounded-xl bg-[#F7F8FA] border border-[#F0B44D]/30 text-xs text-[#8A5A00] flex items-center gap-2">
+              <Clock className="w-4 h-4 text-[#B47814] flex-shrink-0" />
               <span>Chờ người bán ký xác nhận ảnh niêm yết</span>
             </div>
           )
@@ -188,13 +188,13 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
       </div>
     );
   } else if (phase === 'queued') {
-    icon = <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />;
-    tone = 'border-indigo-500/30 bg-indigo-500/10 text-indigo-200';
+    icon = <Loader2 className="w-4 h-4 animate-spin text-[#3458D4]" />;
+    tone = 'border-[#3458D4]/25 bg-[#3458D4]/10 text-[#3458D4]';
     title = 'Đã đủ bằng chứng — AI Agent sắp bắt đầu';
     body = 'Agent quét blockchain vài giây một lần và sẽ tự nhận giao dịch này.';
   } else if (phase === 'analyzing' || phase === 'retrying') {
-    icon = <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />;
-    tone = 'border-indigo-500/40 bg-slate-950/90 text-indigo-200';
+    icon = <Loader2 className="w-4 h-4 animate-spin text-[#3458D4]" />;
+    tone = 'border-[#3458D4]/30 bg-[#F7F8FA] text-[#17191F]';
     title = phase === 'analyzing' ? 'AI Agent đang phân tích bằng chứng…' : `Lần thử ${status.attempts}/${status.max_attempts} chưa thành công — agent sẽ tự thử lại`;
     body =
       phase === 'analyzing' ? (
@@ -202,13 +202,13 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
           {ANALYZE_STEPS.map((label, idx) => (
             <div key={label} className="flex items-center gap-2.5">
               {step > idx ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
               ) : step === idx ? (
-                <Loader2 className="w-4 h-4 animate-spin text-indigo-400 flex-shrink-0" />
+                <Loader2 className="w-4 h-4 animate-spin text-[#3458D4] flex-shrink-0" />
               ) : (
-                <div className="w-4 h-4 rounded-full border border-slate-700 flex-shrink-0" />
+                <div className="w-4 h-4 rounded-full border border-[#E5E7EB] flex-shrink-0" />
               )}
-              <span className={step === idx ? 'text-white font-medium' : step > idx ? 'text-slate-400' : 'text-slate-600'}>
+              <span className={step === idx ? 'text-[#17191F] font-semibold' : step > idx ? 'text-[#525866]' : 'text-[#6B7280]'}>
                 {label}
               </span>
             </div>
@@ -218,13 +218,13 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
         status.detail
       );
   } else if (phase === 'failed') {
-    icon = <AlertTriangle className="w-4 h-4 text-rose-400" />;
-    tone = 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+    icon = <AlertTriangle className="w-4 h-4 text-red-600" />;
+    tone = 'border-red-200 bg-red-50 text-red-700';
     title = 'AI Agent không xử lý được giao dịch này';
     body = `${status.detail || 'Lỗi không xác định.'} Bạn có thể chạy thủ công bên dưới.`;
   } else if (phase === 'attested') {
-    icon = <CheckCircle2 className="w-4 h-4 text-emerald-400" />;
-    tone = 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+    icon = <CheckCircle2 className="w-4 h-4 text-emerald-600" />;
+    tone = 'border-emerald-200 bg-emerald-50 text-emerald-800';
     title = 'AI Agent đã xác thực và ghi kết quả lên blockchain';
     body = 'Đang cập nhật trạng thái giao dịch…';
   } else {
@@ -232,14 +232,14 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
   }
 
   return (
-    <div className="rounded-2xl border border-indigo-500/30 bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-900 p-6 space-y-4 shadow-2xl">
-      <div className="flex items-center justify-between pb-3 border-b border-indigo-500/20">
+    <div className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-6 space-y-4 shadow-sm">
+      <div className="flex items-center justify-between pb-3 border-b border-[#E5E7EB]">
         <div className="flex items-center gap-2">
-          <Bot className="w-5 h-5 text-indigo-400" />
-          <h4 className="text-sm font-bold text-white tracking-tight">AI Agent tự động</h4>
+          <Bot className="w-5 h-5 text-[#3458D4]" />
+          <h4 className="text-sm font-bold text-[#17191F] tracking-tight">AI Agent tự động</h4>
         </div>
-        <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+        <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           Đang theo dõi blockchain
         </span>
       </div>
@@ -257,7 +257,7 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
           <button
             type="button"
             onClick={() => setShowManual((v) => !v)}
-            className="text-[11px] text-slate-400 hover:text-indigo-400 transition-colors flex items-center gap-1"
+            className="text-[11px] text-[#525866] hover:text-[#3458D4] transition-colors flex items-center gap-1"
           >
             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showManual ? 'rotate-180' : ''}`} />
             {showManual ? 'Ẩn phần chạy thủ công' : 'Chạy thủ công (phương án dự phòng)'}
