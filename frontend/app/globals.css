@@ -1,17 +1,41 @@
-@import '@rainbow-me/rainbowkit/styles.css';
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
+:root,
+[data-auth-theme="light"] {
   --background: #0f172a;
   --foreground: #f8fafc;
+
+  /* Quiet Fintech Design Tokens (Light) */
+  --bg: #FFFFFF;
+  --surface: #F6F6F7;
+  --border: #E5E5E7;
+  --text: #111113;
+  --text-muted: #6B6B72;
+  --accent: #E84142;
+  --primary-bg: #111113;
+  --primary-fg: #FFFFFF;
+  --font-sans: "Geist", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.dark,
+[data-auth-theme="dark"] {
+  /* Quiet Fintech Design Tokens (Dark) */
+  --bg: #0E0F11;
+  --surface: #16181C;
+  --border: #26292F;
+  --text: #EDEDEF;
+  --text-muted: #9A9AA3;
+  --accent: #E84142;
+  --primary-bg: #EDEDEF;
+  --primary-fg: #0E0F11;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
   min-height: 100vh;
 }
