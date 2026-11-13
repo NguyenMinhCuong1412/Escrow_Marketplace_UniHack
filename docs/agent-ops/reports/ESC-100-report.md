@@ -163,7 +163,26 @@ $ npm test
 
 ### 4.6. Output Git & AC-12 (`git branch --show-current`, `git status`, `git diff --name-only main...HEAD`)
 
-*(Cập nhật hash commit sau khi tạo commit trên nhánh `ui/esc-100-auth-two-pages`)*
+```text
+$ git branch --show-current
+ui/esc-100-auth-two-pages
+
+$ git diff --name-only main...HEAD
+docs/agent-ops/reports/ESC-100-report.md
+docs/agent-ops/tasks/ESC-100.md
+frontend/app/auth/local/page.tsx
+frontend/app/auth/page.tsx
+frontend/app/globals.css
+frontend/components/AuthGuard.tsx
+frontend/components/ConnectWalletModal.tsx
+frontend/next.config.js
+
+$ git diff --name-only main...HEAD -- backend contracts ai-pipeline scripts docs/context docs/specs README.md
+(rỗng - 0 file ngoài phạm vi)
+
+$ git status -s -- frontend/app/auth frontend/components/ConnectWalletModal.tsx frontend/components/AuthGuard.tsx frontend/app/globals.css frontend/next.config.js docs/agent-ops/tasks/ESC-100.md docs/agent-ops/reports/ESC-100-report.md
+(clean - đã commit đầy đủ trên ui/esc-100-auth-two-pages)
+```
 
 ---
 
