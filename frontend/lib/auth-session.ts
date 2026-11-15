@@ -22,30 +22,43 @@ function getConfiguredChainId(): number {
   return Number.isFinite(raw) ? raw : 43113;
 }
 
+export const MIN_SESSION_SECRET_LENGTH = 32;
+
 /**
  * Resolves the HMAC secret used to sign/verify `escrow_auth_session`.
- * - Prioritizes `SESSION_SECRET` independently from `ATTEST_API_KEY`.
- * - Fails closed on Fuji (43113) and any non-31337 network when missing or equal
- *   to the legacy hardcoded default.
- * - Keeps an ephemeral per-process fallback only when both server & session chain are 31337.
+ * - Requires `SESSION_SECRET` independently; never falls back to `ATTEST_API_KEY`.
+ * - Fails closed on Fuji (43113) and any non-31337 network when missing, blank,
+ *   equal to the legacy default, shorter than 32 characters, or equal to `ATTEST_API_KEY`.
+ * - Uses an ephemeral per-process secret on local Anvil (31337) when `SESSION_SECRET` is unset.
  */
 export function getSecretKey(targetChainId?: number): string {
   const sessionSecret = (process.env.SESSION_SECRET || '').trim();
   const attestApiKey = (process.env.ATTEST_API_KEY || '').trim();
-  const configured = sessionSecret || attestApiKey;
 
   const serverChain = getConfiguredChainId();
   const effectiveChain = targetChainId ?? serverChain;
   const isLocalAnvilOnly =
     serverChain === LOCAL_ANVIL_CHAIN_ID && effectiveChain === LOCAL_ANVIL_CHAIN_ID;
 
-  if (configured) {
-    if (!isLocalAnvilOnly && configured === LEGACY_INSECURE_SECRET) {
-      throw new SessionConfigError(
-        'Không được phép dùng session secret mặc định trên Avalanche Fuji / non-31337.'
-      );
+  if (sessionSecret) {
+    if (!isLocalAnvilOnly) {
+      if (sessionSecret === LEGACY_INSECURE_SECRET) {
+        throw new SessionConfigError(
+          'Không được phép dùng session secret mặc định trên Avalanche Fuji / non-31337.'
+        );
+      }
+      if (sessionSecret.length < MIN_SESSION_SECRET_LENGTH) {
+        throw new SessionConfigError(
+          'SESSION_SECRET phải có độ dài tối thiểu trên môi trường không phải local Anvil (31337).'
+        );
+      }
+      if (attestApiKey && sessionSecret === attestApiKey) {
+        throw new SessionConfigError(
+          'SESSION_SECRET phải độc lập và không được trùng với ATTEST_API_KEY trên non-31337.'
+        );
+      }
     }
-    return configured;
+    return sessionSecret;
   }
 
   if (isLocalAnvilOnly) {

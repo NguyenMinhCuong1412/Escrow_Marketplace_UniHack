@@ -327,3 +327,155 @@ test('SEC-03: /api/verify and /api/uris block foreign Origin, cross-site, Refere
     }
   );
 });
+
+test('FREEZE-004 T1 (Fuji 43113): missing SESSION_SECRET with ATTEST_API_KEY present fails closed and returns 503', async () => {
+  const backendApiKey = 'freeze004-attest-api-key-only-0123456789abcdef';
+  const account = privateKeyToAccount(generatePrivateKey());
+  const getRes = await sessionRoute.GET(new Request('http://127.0.0.1:3000/api/auth/session'));
+  const { nonce } = await getRes.json();
+  const msg = buildAuthChallengeMessage(account.address, nonce, 43113);
+  const signature = await account.signMessage({ message: msg });
+
+  await withEnv(
+    { SESSION_SECRET: undefined, ATTEST_API_KEY: backendApiKey, CHAIN_ID: '43113', NEXT_PUBLIC_CHAIN_ID: '43113' },
+    async () => {
+      assert.throws(() => getSecretKey(43113), SessionConfigError);
+      assert.throws(() => createSessionToken(WALLET_A, 43113), SessionConfigError);
+
+      const forgedWithApiKey = forgeTokenWithSecret(WALLET_A, 43113, backendApiKey);
+      assert.strictEqual(verifySessionToken(forgedWithApiKey), null);
+      assert.strictEqual(
+        verifySessionFromRequest(
+          new Request('http://127.0.0.1:3000/api/listings/mine', {
+            headers: { cookie: `${SESSION_COOKIE_NAME}=${forgedWithApiKey}` },
+          })
+        ),
+        null
+      );
+
+      const postRes = await sessionRoute.POST(
+        new Request('http://127.0.0.1:3000/api/auth/session', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            address: account.address,
+            chainId: 43113,
+            nonce,
+            signature,
+          }),
+        })
+      );
+      assert.strictEqual(postRes.status, 503);
+      const body = await postRes.json();
+      assert.strictEqual(body.error_code, 'SESSION_MISCONFIGURED');
+    }
+  );
+});
+
+test('FREEZE-004 T2 (Fuji 43113): whitespace-only SESSION_SECRET with ATTEST_API_KEY present fails closed', async () => {
+  const backendApiKey = 'freeze004-attest-api-key-only-0123456789abcdef';
+  await withEnv(
+    { SESSION_SECRET: '   \t\n   ', ATTEST_API_KEY: backendApiKey, CHAIN_ID: '43113', NEXT_PUBLIC_CHAIN_ID: '43113' },
+    () => {
+      assert.throws(() => getSecretKey(43113), SessionConfigError);
+      assert.throws(() => createSessionToken(WALLET_A, 43113), SessionConfigError);
+      const forgedWithApiKey = forgeTokenWithSecret(WALLET_A, 43113, backendApiKey);
+      assert.strictEqual(verifySessionToken(forgedWithApiKey), null);
+    }
+  );
+});
+
+test('FREEZE-004 T3 (D2, Fuji 43113): SESSION_SECRET shorter than 32 chars fails closed without leaking secret or length', async () => {
+  const short23 = 'short-secret-23-chars-!'; // length === 23 (never substring of 31337)
+  const short31 = 'short-secret-31-chars-123456789'; // exact boundary length === 31
+  assert.strictEqual(short23.length, 23);
+  assert.strictEqual(short31.length, 31);
+
+  for (const [candidate, lenStr] of [[short23, '23'], [short31, '31']]) {
+    await withEnv(
+      { SESSION_SECRET: candidate, ATTEST_API_KEY: undefined, CHAIN_ID: '43113', NEXT_PUBLIC_CHAIN_ID: '43113' },
+      () => {
+        assert.throws(
+          () => getSecretKey(43113),
+          (err) => {
+            assert.ok(err instanceof SessionConfigError);
+            assert.ok(!err.message.includes(candidate));
+            assert.ok(!new RegExp(`\\b${lenStr}\\b`).test(err.message));
+            return true;
+          }
+        );
+        assert.throws(() => createSessionToken(WALLET_A, 43113), SessionConfigError);
+        const forgedShort = forgeTokenWithSecret(WALLET_A, 43113, candidate);
+        assert.strictEqual(verifySessionToken(forgedShort), null);
+      }
+    );
+  }
+});
+
+test('FREEZE-004 T4 (D2, Fuji 43113): SESSION_SECRET equal to ATTEST_API_KEY fails closed', async () => {
+  const sharedSecret = 'shared-secret-value-at-least-32-chars-012345';
+  await withEnv(
+    { SESSION_SECRET: sharedSecret, ATTEST_API_KEY: sharedSecret, CHAIN_ID: '43113', NEXT_PUBLIC_CHAIN_ID: '43113' },
+    () => {
+      assert.throws(
+        () => getSecretKey(43113),
+        (err) => {
+          assert.ok(err instanceof SessionConfigError);
+          assert.ok(!err.message.includes(sharedSecret));
+          return true;
+        }
+      );
+      assert.throws(() => createSessionToken(WALLET_A, 43113), SessionConfigError);
+      const forgedShared = forgeTokenWithSecret(WALLET_A, 43113, sharedSecret);
+      assert.strictEqual(verifySessionToken(forgedShared), null);
+    }
+  );
+});
+
+test('FREEZE-004 T5 (D3, Anvil 31337): missing SESSION_SECRET with ATTEST_API_KEY uses ephemeral secret and never ATTEST_API_KEY', async () => {
+  const backendApiKey = 'freeze004-anvil-attest-key-only-0123456789abc';
+  await withEnv(
+    { SESSION_SECRET: undefined, ATTEST_API_KEY: backendApiKey, CHAIN_ID: '31337', NEXT_PUBLIC_CHAIN_ID: '31337' },
+    () => {
+      const resolved = getSecretKey(31337);
+      assert.ok(resolved.length >= 32);
+      assert.notStrictEqual(resolved, backendApiKey);
+
+      const token = createSessionToken(WALLET_A, 31337);
+      const decoded = verifySessionToken(token);
+      assert.ok(decoded);
+      assert.strictEqual(decoded.address, WALLET_A);
+      assert.strictEqual(decoded.chainId, 31337);
+
+      const forgedWithApiKey = forgeTokenWithSecret(WALLET_A, 31337, backendApiKey);
+      assert.strictEqual(verifySessionToken(forgedWithApiKey), null);
+    }
+  );
+
+  // Explicit legacy secret remains accepted on local Anvil 31337 per compatibility rule
+  await withEnv(
+    { SESSION_SECRET: LEGACY_SECRET, ATTEST_API_KEY: backendApiKey, CHAIN_ID: '31337', NEXT_PUBLIC_CHAIN_ID: '31337' },
+    () => {
+      assert.strictEqual(getSecretKey(31337), LEGACY_SECRET);
+      const token = createSessionToken(WALLET_A, 31337);
+      assert.ok(verifySessionToken(token));
+    }
+  );
+});
+
+test('FREEZE-004 T6 (Fuji 43113): valid independent SESSION_SECRET >= 32 chars distinct from ATTEST_API_KEY succeeds', async () => {
+  const validSessionSecret = 'independent-valid-session-secret-0123456789abcd';
+  const backendApiKey = 'independent-backend-attest-api-key-9876543210';
+  await withEnv(
+    { SESSION_SECRET: validSessionSecret, ATTEST_API_KEY: backendApiKey, CHAIN_ID: '43113', NEXT_PUBLIC_CHAIN_ID: '43113' },
+    () => {
+      assert.strictEqual(getSecretKey(43113), validSessionSecret);
+      const token = createSessionToken(WALLET_A, 43113);
+      const decoded = verifySessionToken(token);
+      assert.ok(decoded);
+      assert.strictEqual(decoded.address, WALLET_A);
+      assert.strictEqual(decoded.chainId, 43113);
+      assert.strictEqual(verifySessionToken(forgeTokenWithSecret(WALLET_A, 43113, backendApiKey)), null);
+    }
+  );
+});

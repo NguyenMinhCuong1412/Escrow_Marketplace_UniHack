@@ -1,16 +1,16 @@
 # Escrow Marketplace for Collectibles
-Decentralized collectibles marketplace on Avalanche C-Chain (Fuji `43113` / Anvil `31337`) with 30% AVAX deposit-only escrow and autonomous AI evidence attestation.
+Collectibles marketplace with on-chain 30% AVAX deposit-only escrow on Avalanche C-Chain (Fuji `43113` / Anvil `31337`) and AI evidence attestation.
 Tech stack: Next.js 15 App Router (BFF HMAC + Local Wallet + Wagmi) · FastAPI + SQLite WAL (Python 3.12) · OpenCV, Tesseract OCR, pHash · Solidity (Foundry 1.5.1, OpenZeppelin v5.1) · Avalanche Fuji.
 
 ---
 
 ## 1. Giới thiệu sản phẩm
 
-Escrow Marketplace là sàn giao dịch đồ sưu tầm nhiều người dùng (LEGO, mô hình, figure, thẻ bài, xu sưu tầm) kết hợp ký quỹ phi tập trung trên Avalanche C-Chain. Người dùng duyệt, đăng bán và gửi yêu cầu mua off-chain, sau đó khóa giao dịch bằng **Escrow ký quỹ cọc 30% AVAX** và dùng **AI Agent** phân tích bằng chứng đóng gói / mở hộp (ảnh & video) để chứng thực rủi ro on-chain.
+Escrow Marketplace là sàn giao dịch đồ sưu tầm nhiều người dùng (LEGO, mô hình, figure, thẻ bài, xu sưu tầm), trong đó danh mục niêm yết, giữ chỗ và yêu cầu mua được vận hành **off-chain (FastAPI + SQLite)**, kết hợp **hợp đồng thông minh Escrow ký quỹ cọc 30% AVAX** trên Avalanche C-Chain và **AI Agent** phân tích bằng chứng (ảnh & video) để neo hash bằng chứng và kết quả kiểm tra on-chain.
 
 - **Ký quỹ 30% minh bạch:** Người mua và người bán mỗi bên đặt cọc đúng **30% giá trị niêm yết** bằng AVAX (`MAX_DEPOSIT_BPS = 3000`); token **CDU** (`CollectibleToken`) là token kế toán Soulbound 1:1 không chuyển nhượng. Hợp đồng chỉ giữ tiền cọc (không giữ toàn bộ giá mua hàng hóa).
 - **Xác thực AI tự trị:** Pipeline thị giác máy tính kết hợp pHash (chống tái sử dụng ảnh), ORB/RANSAC (so khớp đặc trưng vật thể) và QR/OCR (nhận diện nonce chống giả mạo thời gian thực).
-- **An toàn tài chính & quyền AI:** AI Agent (`onlyAgent`) chỉ được gửi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence`. Hoàn cọc sạch thực hiện qua `resolveClean()`; mọi tranh chấp (`flagged=true` hoặc `fileComplaint()`) do **Owner / Arbiter** quyết định qua `resolveDispute()`.
+- **An toàn tài chính & quyền AI:** AI Agent (`onlyAgent`) chỉ được gửi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence` để chứng thực điểm rủi ro và gắn cờ cảnh báo; AI không trực tiếp phân xử tiền cọc. `resolveClean()` chỉ hoàn cọc hai bên khi trade `Attested`, không bị gắn cờ (`!flagged`) và đã quá `disputeDeadline` (không thanh toán giá trị món hàng); mọi tranh chấp (`flagged=true` hoặc `fileComplaint()`) do **Owner / Arbiter (một ví EOA)** quyết định qua `resolveDispute()`.
 
 ## 2. Kiến trúc hệ thống
 
@@ -28,8 +28,9 @@ Escrow Marketplace là sàn giao dịch đồ sưu tầm nhiều người dùng 
 ```
 
 ### Nguyên tắc vận hành cốt lõi
-- **Ký quỹ 30% AVAX (Deposit-only Escrow):** `Escrow.sol` giữ tiền cọc **30% giá trị niêm yết** từ mỗi bên (`MAX_DEPOSIT_BPS = 3000`), không giữ toàn bộ giá mua hàng hóa trên contract. Token **CDU** (`CollectibleToken.sol`) là token kế toán **Soulbound 1:1** theo lượng cọc đang ký quỹ, không chuyển nhượng.
-- **Giới hạn quyền AI Agent (`onlyAgent`):** AI Agent chỉ được gọi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence`. Mọi tranh chấp (`flagged=true` hoặc khiếu nại) do **Owner / Arbiter** xử lý on-chain qua `resolveDispute()`.
+- **Marketplace off-chain & Ký quỹ 30% AVAX (Deposit-only Escrow):** Danh mục niêm yết, yêu cầu mua và giữ chỗ 30 phút nằm trong backend **FastAPI + SQLite WAL** (thành phần tin cậy cùng Next.js BFF). Trên chain, `Escrow.sol` chỉ giữ tiền cọc **30% giá trị niêm yết** từ mỗi bên (`MAX_DEPOSIT_BPS = 3000`) và neo hash bằng chứng/báo cáo; hợp đồng không giữ và không thanh toán giá mua hàng hóa (thanh toán tiền hàng thực hiện P2P ngoài hợp đồng). Token **CDU** (`CollectibleToken.sol`) là token kế toán **Soulbound 1:1** theo lượng cọc đang ký quỹ, không chuyển nhượng.
+- **Điều kiện hoàn cọc sạch (`resolveClean()`):** Chỉ chạy được khi trade ở trạng thái `Attested`, **không bị flag** (`!flagged`) và **đã quá `disputeDeadline`** mà không có khiếu nại; bất kỳ địa chỉ nào cũng có thể gọi để hoàn lại tiền cọc hai bên (+1 điểm uy tín), **không** thanh toán giá trị món hàng.
+- **Giới hạn quyền AI Agent & Trọng tài (`onlyAgent` / `onlyOwner`):** AI Agent chỉ được gọi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence` để ghi nhận kết quả kiểm tra và gắn cờ cảnh báo. Mọi tranh chấp (`flagged=true` hoặc khiếu nại qua `fileComplaint()`) do **Owner / Arbiter (một ví EOA)** xử lý on-chain qua `resolveDispute()`.
 
 ## 3. Hướng dẫn chạy môi trường Local
 
@@ -88,3 +89,14 @@ cd frontend && npx tsc --noEmit && npm test && npm run build
 - **AI Agent Address (`onlyAgent`):** `0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081`
 - **Owner / Arbiter Address:** `0xCa76cBE87902108712729A02F78C1F8cC20b39Eb`
 - **Window Parameters (`43113.json`):** `evidenceWindow=600s`, `attestWindow=600s`, `disputeWindow=90s`
+
+## 6. Known Limitations
+
+1. **Cơ chế deposit-only (`OD-01`):** Hợp đồng `Escrow.sol` chỉ giữ tiền cọc 30% giá trị món hàng từ mỗi bên (`MAX_DEPOSIT_BPS = 3000`), không giữ và không thanh toán giá trị món hàng; thanh toán tiền hàng hóa thực hiện P2P ngoài hợp đồng.
+2. **Trọng tài tập trung (`OD-02` / `OD-03`):** Hệ thống chưa phải cơ chế trọng tài phi tập trung — một ví **Owner EOA** là trọng tài duy nhất cho `resolveDispute()`. Trạng thái `Disputed` chưa có timeout giải cứu tự động và hợp đồng không chặn Owner tham gia giao dịch.
+3. **Marketplace vận hành off-chain:** Danh mục niêm yết, giữ chỗ 30 phút và đồng bộ trạng thái nằm trên backend `FastAPI + SQLite`. Backend và Next.js BFF là thành phần tin cậy ngoài chuỗi.
+4. **Pipeline AI mang tính heuristic (`TST-06`):** Pipeline thị giác máy tính (pHash, ORB/RANSAC, QR/OCR) chưa có bộ đánh giá định lượng quy mô lớn và kết quả có thể sai lệch; do đó tranh chấp luôn do Owner quyết định.
+5. **Tính công khai trên IPFS (`OD-05`):** Ảnh và video bằng chứng đưa lên IPFS là công khai và lưu trữ lâu dài.
+6. **Rủi ro thao túng điểm uy tín (`OD-04`):** Điểm `reputation` on-chain có thể bị hai ví thông đồng tăng nhân tạo qua các giao dịch hoàn tất liên tiếp.
+7. **Cảnh báo dependency npm (`SEC-01`):** `npm audit --omit=dev` ghi nhận **22 cảnh báo (13 High, 9 Moderate)**, đều là phụ thuộc gián tiếp của Next.js / wagmi / WalletConnect (`postcss`, `zod`, `uuid`…). Các bản vá chính thức yêu cầu nâng **major** (Next 16, wagmi 3), **chưa thực hiện trong thời gian hackathon**. Đánh giá sơ bộ: rủi ro thấp cho bản demo testnet.
+8. **Chỉ dùng mạng thử nghiệm (`DEC-003`):** Hệ thống chỉ dùng cho **Avalanche Fuji testnet (`43113`)** và Anvil local (`31337`), không dùng tiền thật hay triển khai mainnet.
