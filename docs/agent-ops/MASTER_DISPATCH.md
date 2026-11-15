@@ -32,6 +32,7 @@
 | 4F | ESC-090 | `docs/agent-ops/tasks/RULES_UPDATE_TASK_SPEC.md` | `ops/esc-090-rules-update` | `.agents/`, `CLAUDE.md`, `docs/agent-ops/` | — | IN_PROGRESS |
 | 6 | ESC-060 | `docs/agent-ops/tasks/ESC-060.md` | *(read-only)* | READ-ONLY | Owner decisions (Q2, Q3) & ESC-080/090 | BLOCKED |
 | 7 | ESC-070 | `docs/agent-ops/tasks/ESC-070.md` | `phase/7-submit` | `README.md`, docs | Phase 6 | BLOCKED |
+| Freeze | FREEZE-003-DEPS | `docs/agent-ops/FREEZE-003-DEPS-TASK.md` | `main` *(Owner worktree exception)* | `frontend/package*.json`, `.bak` | — | ACCEPTED WITH LIMITATIONS (Owner 15/11/2026; Re-QA `reports/FREEZE-003-DEPS-REQA.md`. Limitations: L1 Cowork chưa tự xác minh build Windows sau rollback; L2 lệnh snapshot manifest phải dùng `-LiteralPath` ở các task sau) |
 
 ---
 

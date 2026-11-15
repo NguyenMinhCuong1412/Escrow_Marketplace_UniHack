@@ -1,23 +1,24 @@
 # Project Brief – Escrow Marketplace cho đồ sưu tầm
 
-> Trạng thái: `CONFIRMED – Phase 0+1+2 hoàn thành 04/11/2026`  
-> Cập nhật: 2026-11-05
+> Trạng thái: `UPDATED (MKT-005) – đồng bộ theo codebase hiện tại`
+> Cập nhật: 2026-11-15
+> Verified against commit: `bdb1e138cc6ccf0030e784f4eb0c6c18c75660a5` (working tree gồm thay đổi MKT-001..MKT-005 chưa commit — cập nhật hash sau khi merge)
 
 ## Tổng quan
 
-- **Tên dự án:** Escrow Marketplace (tên chính thức chưa chốt — xem `OPEN_QUESTIONS.md` Q-011)
+- **Tên dự án:** **Escrow Marketplace** (`DEC-017` `CONFIRMED`)
 - **Cuộc thi:** Team1 Vietnam UniHack: Build on Avalanche (02–30/11/2026, team1vn.xyz)
 - **Track:** AI Agents and Security
-- **Mục tiêu:** Marketplace với cơ chế escrow + AI verification tự động cho giao dịch đồ sưu tầm P2P
-- **Trạng thái:** Phase 0+1+2 DONE. Đang chuẩn bị frontend + deploy Fuji
+- **Mục tiêu:** Sàn giao dịch đồ sưu tầm P2P (LEGO, mô hình, figure, thẻ bài, xu sưu tầm) kết hợp ký quỹ cọc 30% AVAX trên Avalanche C-Chain và AI Agent chứng thực bằng chứng đóng gói/mở hộp on-chain
+- **Trạng thái:** Smart Contracts đã deploy Fuji (`43113.json`), Backend + Marketplace SQLite WAL + AI Pipeline + Frontend Next.js 15 & BFF đã hoàn thiện và vá bảo mật P1 (`MKT-001..MKT-005`); đang chờ Avalanche Fuji Manual Verification trước khi Final Freeze
 
 ## Team
 
 | Thành viên | Vai trò | Ghi chú |
 |---|---|---|
 | Hứa Kiến Quốc (MSSV 25127130) | Team Lead — Contract, AI Pipeline, Backend | Sinh viên năm 2 CNTT, nền tảng Computer Vision/Data Science |
-| Nguyễn Minh Cường | Thành viên | Chưa phân công cụ thể |
-| Nguyễn Phú Nguyên Vũ | Thành viên | Chưa phân công cụ thể |
+| Nguyễn Minh Cường | Thành viên | — |
+| Nguyễn Phú Nguyên Vũ | Thành viên | — |
 
 ## Cấu trúc dự án
 
@@ -25,34 +26,38 @@
 project-root/
 ├── contracts/                         # Foundry project
 │   ├── src/
-│   │   ├── Escrow.sol                 # Smart contract chính — custody, state machine, penalty, reputation
-│   │   └── CollectibleToken.sol       # Utility token Soulbound — mint/burn 1:1 với AVAX deposit
-│   ├── test/                          # 81 tests (unit + fuzz + invariant)
+│   │   ├── Escrow.sol                 # Smart contract chính — 30% AVAX deposit custody, state machine, penalty, reputation
+│   │   └── CollectibleToken.sol       # Utility token Soulbound (CDU) — mint/burn 1:1 với AVAX deposit
+│   ├── test/                          # Foundry tests (unit + fuzz + invariant)
 │   ├── script/
 │   │   ├── Deploy.s.sol               # Deploy script, ghi deployments/<chainId>.json
 │   │   └── e2e_anvil.sh               # E2E test trên anvil local
+│   ├── deployments/43113.json         # Địa chỉ & window đã deploy trên Avalanche Fuji
 │   └── lib/                           # OpenZeppelin v5.1.0, forge-std
 ├── ai-pipeline/                       # AI verification pipeline
-│   ├── evidence_check.py              # pHash + ORB + OCR nonce + CLIP + video support
-│   └── tests/                         # 59 unit tests + synth.py (ảnh test tổng hợp)
-├── backend/                           # FastAPI backend
-│   ├── attest_service.py              # /verify-evidence, /health, /trade/{id}, /report/{id}
+│   ├── evidence_check.py              # pHash + ORB + QR/OCR nonce + video keyframe + CLIP tùy chọn
+│   └── tests/                         # Unit tests + synth.py (ảnh test tổng hợp)
+├── backend/                           # FastAPI backend + Marketplace persistence
+│   ├── attest_service.py              # Attest API, URI registry, HMAC/replay guard, Marketplace routes
+│   ├── listings.py & db.py            # Marketplace SQLite WAL (DATA_DIR/marketplace.db), TTL 30m, chain sync
+│   ├── auto_agent.py                  # Auto agent background loop (DEC-013)
 │   ├── chain.py                       # Web3 interaction layer
 │   ├── abi/                           # Contract ABI files
+│   ├── tests/                         # Backend, Marketplace & Anvil integration tests (`pytest -rs`)
 │   ├── Dockerfile                     # Container build
 │   └── .env.example                   # Cấu hình mẫu
-├── docs/                              # Spec documents (Phase 2 output)
-│   ├── FRONTEND_SPEC.md               # Spec cho frontend (chưa code)
-│   ├── VAI3_DYNAMIC_DEPOSIT_SPEC.md   # Stretch goal: dynamic deposit
-│   ├── L1_MODULE_SPEC.md              # Stretch goal: custom L1 reputation
-│   └── SLIDE_AND_VIDEO_SCRIPT.md      # Outline slide + kịch bản video
-├── .agents/                  # Agent rules & skills
-│   ├── docs/context/                  # Nguồn sự thật dự án (file này)
-│   ├── docs/agent-ops/                # Prompts, templates, reports
-│   ├── .agents/rules/                 # Coding rules theo domain
-│   ├── .agents/skills/                # Agent skills
-│   ├── guides/                        # Setup guides 01–09
-│   └── tools/                         # Validation scripts
+├── frontend/                          # Next.js 15 App Router + BFF + Web3 UI
+│   ├── app/                           # Marketplace `/`, `/listings/[id]`, `/sell`, `/trades`, `/trade/*`, `/auth*`, `/admin`, BFF `/api/*`
+│   ├── components/                    # UI components (Shopee-style cards, Core/Local Wallet, AI Report)
+│   ├── lib/                           # BFF HMAC proxy, auth-session (fail-closed), CSRF/SSRF/pin security, local-wallet
+│   ├── test/                          # Security, auth, wallet & marketplace unit tests (`npm test`)
+│   └── .env.local.example             # Biến môi trường mẫu (BFF & Session secrets)
+├── docs/                              # Specs, context docs & agent-ops reports
+│   ├── context/                       # Nguồn sự thật dự án
+│   ├── agent-ops/                     # Task specs, QA/Release reports, RISK_REGISTER.md
+│   ├── audit/                         # Báo cáo audit quy trình & bảo mật
+│   └── specs/                         # Đặc tả thiết kế (FRONTEND_SPEC, VAI3, L1_MODULE, SLIDE_AND_VIDEO_SCRIPT)
+├── .agents/                           # Agent rules & skills (`.agents/rules/`, `.agents/skills/`)
 ├── CLAUDE.md                          # Pointer file cho Claude Code sessions
 ├── pytest.ini                         # Python test config
 └── requirements-dev.txt               # Python dev dependencies
@@ -60,10 +65,10 @@ project-root/
 
 ## Ràng buộc
 
-- Giữ stack hiện tại (Foundry + FastAPI + OpenCV/Tesseract) — đã có 177 tests pass.
-- Không dùng tiền thật hoặc mainnet — Fuji testnet only.
-- AI không tự quyết định release/refund — chỉ attest, contract enforce.
-- Giữ Solidity contract gọn — ưu tiên hoàn thiện hơn phức tạp (kinh nghiệm Solidity còn non).
+- Giữ stack hiện tại (Foundry + FastAPI + SQLite WAL + OpenCV/Tesseract + Next.js 15 BFF).
+- Không dùng tiền thật hoặc mainnet — Fuji testnet only (`DEC-003`).
+- Contract chỉ giữ cọc 30% AVAX mỗi bên (`MAX_DEPOSIT_BPS = 3000`); AI chỉ được ký `attest()`, mọi giải ngân sạch qua `resolveClean()` và tranh chấp qua `Owner` (`resolveDispute()`).
+- Kiểm thử phải chạy lại và trích đúng số liệu từ report mới nhất (`MKT-005-remediation-report.md`).
 - Mọi task code phải có acceptance criteria và test evidence.
 
 ## Tài liệu liên quan
