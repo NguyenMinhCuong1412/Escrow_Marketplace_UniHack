@@ -25,10 +25,13 @@ Cấu hình: xem backend/.env.example (AGENT_PRIVATE_KEY KHÔNG BAO GIỜ commit
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -59,6 +62,19 @@ from chain import (  # noqa: E402
 )
 
 from auto_agent import AutoAgent, UriConflict, UriRegistry, listing_message, recover_signer  # noqa: E402
+from db import MarketplaceDB  # noqa: E402
+from listings import (  # noqa: E402
+    BindTradeRequest,
+    CancelRequestBody,
+    CreateListingRequest,
+    CreatePurchaseRequest,
+    DecisionRequest,
+    MarketplaceError,
+    MarketplaceService,
+    UpdateListingRequest,
+    compute_proxy_signature,
+    normalize_wallet,
+)
 
 log = logging.getLogger("attest")
 
@@ -100,6 +116,13 @@ class Settings:
     download_timeout: int = 30
     agent_auto: bool = False          # True: agent chạy nền tự verify + attest (DEC-005 phương án A)
     agent_poll_seconds: float = 5.0
+    chain_id: Optional[int] = None
+    reservation_ttl_seconds: int = 1800
+    inspect_listing_images: bool = False
+    require_proxy_signature: bool = False
+    proxy_sig_ttl_seconds: int = 300
+    trust_proxy_forwarded_for: bool = False
+    verify_chain_before_ttl_release: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -119,6 +142,13 @@ class Settings:
             cors_origins=cors_origins,
             agent_auto=_env_bool("AGENT_AUTO", False),
             agent_poll_seconds=float(os.environ.get("AGENT_POLL_SECONDS", cls.agent_poll_seconds)),
+            chain_id=int(os.environ["CHAIN_ID"]) if os.environ.get("CHAIN_ID") else None,
+            reservation_ttl_seconds=int(os.environ.get("RESERVATION_TTL_SECONDS", cls.reservation_ttl_seconds)),
+            inspect_listing_images=_env_bool("INSPECT_LISTING_IMAGES", True),
+            require_proxy_signature=_env_bool("REQUIRE_PROXY_SIGNATURE", False),
+            proxy_sig_ttl_seconds=int(os.environ.get("PROXY_SIG_TTL_SECONDS", cls.proxy_sig_ttl_seconds)),
+            trust_proxy_forwarded_for=_env_bool("TRUST_PROXY_FORWARDED_FOR", False),
+            verify_chain_before_ttl_release=_env_bool("VERIFY_CHAIN_BEFORE_TTL_RELEASE", True),
         )
         if os.environ.get("ESCROW_ABI_PATH"):
             s.escrow_abi_path = Path(os.environ["ESCROW_ABI_PATH"])
@@ -161,6 +191,10 @@ def insecure_reasons(settings: Settings, chain_id: Optional[int]) -> list[str]:
         reasons.append("ALLOW_LOCAL_HOSTS is True")
     if not settings.enforce_evidence_hash:
         reasons.append("ENFORCE_EVIDENCE_HASH is False")
+    if not getattr(settings, "verify_chain_before_ttl_release", True):
+        reasons.append("VERIFY_CHAIN_BEFORE_TTL_RELEASE is False")
+    if not getattr(settings, "require_proxy_signature", False):
+        reasons.append("REQUIRE_PROXY_SIGNATURE is False")
     return reasons
 
 
@@ -412,7 +446,9 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
     reports_dir = settings.data_dir / "reports"
     store = KnownHashStore(settings.data_dir / "known_hashes.json")
     registry = UriRegistry(settings.data_dir / "trade_uris.json")
-    state = {"client": client}
+    db = MarketplaceDB(settings.data_dir / "marketplace.db")
+    marketplace = MarketplaceService(db=db, settings=settings, download_fn=download)
+    state = {"client": client, "readonly_client": client}
     trade_locks: dict[int, threading.Lock] = {}
     trade_locks_guard = threading.Lock()
 
@@ -426,6 +462,17 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
                 "reasons": exc.reasons,
             },
         )
+
+    @app.exception_handler(MarketplaceError)
+    def marketplace_error_handler(request: Request, exc: MarketplaceError):
+        body = {
+            "error_code": exc.error_code,
+            "detail": exc.message,
+            "message": exc.message,
+        }
+        if exc.details is not None:
+            body["details"] = exc.details
+        return JSONResponse(status_code=exc.status_code, content=body)
 
     rate_limit_lock = threading.Lock()
     rate_limit_records: dict[str, list[float]] = {}
@@ -558,24 +605,196 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
 
     def check_api_key(x_api_key: Optional[str]) -> None:
         if settings.attest_api_key:
-            if not x_api_key or x_api_key != settings.attest_api_key:
+            if not x_api_key or not hmac.compare_digest(x_api_key.encode("utf-8"), settings.attest_api_key.encode("utf-8")):
                 raise HTTPException(status_code=401, detail="Invalid or missing API key")
         else:
             log.warning("ATTEST_API_KEY không được thiết lập - bỏ qua xác thực (chế độ dev)")
 
-    def check_rate_limit(request: Request, bucket: str = "verify", limit: int = RATE_LIMIT_MAX_REQUESTS) -> None:
-        """In-memory rate limiter per (bucket, IP); each endpoint group has its own quota."""
-        client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
-        key = client_ip if bucket == "verify" else f"{bucket}:{client_ip}"
+    def _consume_rate_limit(key: str, limit: int, *, marketplace: bool = False) -> None:
         now = time.time()
         with rate_limit_lock:
             timestamps = rate_limit_records.get(key, [])
             timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
             if len(timestamps) >= limit:
                 rate_limit_records[key] = timestamps
-                raise HTTPException(status_code=429, detail=f"Too Many Requests: Rate limit exceeded ({limit} req/min)")
+                msg = f"Too Many Requests: Rate limit exceeded ({limit} req/min)"
+                if marketplace:
+                    raise MarketplaceError(429, "RATE_LIMIT_EXCEEDED", msg)
+                raise HTTPException(status_code=429, detail=msg)
             timestamps.append(now)
             rate_limit_records[key] = timestamps
+
+    def check_rate_limit(request: Request, bucket: str = "verify", limit: int = RATE_LIMIT_MAX_REQUESTS) -> None:
+        """In-memory rate limiter per (bucket, IP); each endpoint group has its own quota."""
+        client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+        key = client_ip if bucket == "verify" else f"{bucket}:{client_ip}"
+        _consume_rate_limit(key, limit, marketplace=False)
+
+    def get_readonly_client() -> Optional[EscrowClient]:
+        if state["client"] is not None:
+            return state["client"]
+        if state["readonly_client"] is not None:
+            return state["readonly_client"]
+        if not settings.rpc_url:
+            return None
+        if settings.agent_private_key:
+            c = get_client()
+            state["readonly_client"] = c
+            return c
+        if not settings.escrow_abi_path.exists():
+            return None
+        abi = load_abi(settings.escrow_abi_path)
+        address = settings.escrow_address
+        if not address:
+            cid = settings.chain_id
+            if cid is None:
+                cid = int(Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10})).eth.chain_id)
+            address = find_escrow_address(settings.deployments_dir, cid)
+        if not address:
+            return None
+        rc = EscrowClient(settings.rpc_url, address, abi, agent_private_key=None)
+        state["readonly_client"] = rc
+        return rc
+
+    def active_chain_context(require_client: bool = False) -> tuple[int, str, Optional[EscrowClient]]:
+        """Trả (chain_id, escrow_address_lower, client_or_none) và luôn kiểm tra fail-closed guard."""
+        if require_client or state["client"] is not None:
+            c = get_client()
+            check_security_guard(c)
+            cid = get_chain_id(c)
+            esc = (
+                (c.escrow.address if hasattr(c, "escrow") and hasattr(c.escrow, "address") else None)
+                or settings.escrow_address
+                or find_escrow_address(settings.deployments_dir, cid)
+                or "0x0000000000000000000000000000000000000000"
+            )
+            return cid, esc.lower(), c
+
+        if settings.rpc_url:
+            known_cid = state.get("chain_id") if state.get("chain_id") is not None else settings.chain_id
+            if known_cid is not None:
+                reasons = insecure_reasons(settings, known_cid)
+                if reasons:
+                    raise InsecureConfigError(reasons)
+            try:
+                c = get_readonly_client()
+                if c is not None:
+                    check_security_guard(c)
+                    cid = get_chain_id(c)
+                    esc = (
+                        (c.escrow.address if hasattr(c, "escrow") and hasattr(c.escrow, "address") else None)
+                        or settings.escrow_address
+                        or find_escrow_address(settings.deployments_dir, cid)
+                        or "0x0000000000000000000000000000000000000000"
+                    )
+                    return cid, esc.lower(), c
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log.warning("RPC không khả dụng trong active_chain_context: %s", exc)
+                if known_cid is None:
+                    raise HTTPException(502, "Không kết nối được RPC để xác định mạng Escrow.")
+                esc = (
+                    settings.escrow_address
+                    or find_escrow_address(settings.deployments_dir, known_cid)
+                    or "0x0000000000000000000000000000000000000000"
+                )
+                return int(known_cid), esc.lower(), None
+
+        cid = settings.chain_id if settings.chain_id is not None else 31337
+        reasons = insecure_reasons(settings, cid)
+        if reasons:
+            raise InsecureConfigError(reasons)
+        esc = (
+            settings.escrow_address
+            or find_escrow_address(settings.deployments_dir, cid)
+            or "0x0000000000000000000000000000000000000000"
+        )
+        return cid, esc.lower(), None
+
+    def resolve_read_rate_key(request: Request, x_api_key: Optional[str], x_authenticated_wallet: Optional[str]) -> str:
+        """Khóa rate-limit theo ví (nếu có) hoặc IP thật qua proxy tin cậy thay vì IP proxy."""
+        if x_authenticated_wallet:
+            try:
+                return f"mkt_read:wallet:{normalize_wallet(x_authenticated_wallet, 'X-Authenticated-Wallet')}"
+            except MarketplaceError:
+                pass
+        trusted_proxy = bool(
+            settings.trust_proxy_forwarded_for
+            or (settings.attest_api_key and x_api_key and hmac.compare_digest(x_api_key.encode("utf-8"), settings.attest_api_key.encode("utf-8")))
+        )
+        if trusted_proxy:
+            fwd = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+            if fwd:
+                return f"mkt_read:ip:{fwd}"
+        client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+        return f"mkt_read:ip:{client_ip}"
+
+    def authenticate_marketplace_actor(
+        request: Request,
+        chain_id: int,
+        x_api_key: Optional[str],
+        x_authenticated_wallet: Optional[str],
+        x_authenticated_chain_id: Optional[str],
+        x_auth_timestamp: Optional[str],
+        x_auth_nonce: Optional[str],
+        x_auth_signature: Optional[str],
+        bucket: str = "mkt_write",
+        limit: int = 60,
+    ) -> str:
+        """Xác thực server BFF tin cậy, ví người dùng, chống replay và rate-limit theo ví."""
+        if settings.attest_api_key:
+            if not x_api_key or not hmac.compare_digest(x_api_key.encode("utf-8"), settings.attest_api_key.encode("utf-8")):
+                raise MarketplaceError(401, "UNAUTHORIZED", "Invalid or missing API key.")
+
+        if not x_authenticated_wallet:
+            raise MarketplaceError(401, "MISSING_AUTHENTICATED_WALLET", "Yêu cầu xác thực ví thông qua kênh BFF tin cậy.")
+        actor = normalize_wallet(x_authenticated_wallet, "X-Authenticated-Wallet")
+
+        if x_authenticated_chain_id is not None and x_authenticated_chain_id.strip():
+            try:
+                hdr_chain = int(x_authenticated_chain_id.strip())
+            except ValueError:
+                raise MarketplaceError(422, "INVALID_CHAIN_ID", "X-Authenticated-Chain-Id không hợp lệ.")
+            if hdr_chain != chain_id:
+                raise MarketplaceError(409, "CHAIN_MISMATCH", "Mạng ví không khớp với mạng đang phục vụ.")
+
+        has_sig_headers = any(v is not None for v in (x_auth_timestamp, x_auth_nonce, x_auth_signature))
+        if settings.require_proxy_signature or chain_id != 31337 or has_sig_headers:
+            if not settings.attest_api_key or not settings.attest_api_key.strip():
+                raise InsecureConfigError(["ATTEST_API_KEY is empty for signed proxy verification"])
+            if not x_auth_timestamp or not x_auth_nonce or not x_auth_signature:
+                raise MarketplaceError(401, "MISSING_PROXY_SIGNATURE", "Thiếu thông tin chữ ký chống replay từ proxy.")
+            try:
+                ts = int(x_auth_timestamp.strip())
+            except ValueError:
+                raise MarketplaceError(401, "INVALID_PROXY_TIMESTAMP", "X-Auth-Timestamp không hợp lệ.")
+
+            now = marketplace.clock()
+            if abs(now - ts) > settings.proxy_sig_ttl_seconds:
+                raise MarketplaceError(401, "EXPIRED_PROXY_REQUEST", "Chữ ký yêu cầu từ proxy đã quá hạn.")
+
+            nonce = x_auth_nonce.strip()
+            if not re.match(r"^[A-Za-z0-9._-]{8,128}$", nonce):
+                raise MarketplaceError(401, "INVALID_PROXY_NONCE", "X-Auth-Nonce không đúng định dạng.")
+
+            expected_sig = compute_proxy_signature(
+                settings.attest_api_key,
+                request.method,
+                request.url.path,
+                actor,
+                chain_id,
+                ts,
+                nonce,
+            )
+            if not hmac.compare_digest(expected_sig.encode("utf-8"), x_auth_signature.strip().lower().encode("utf-8")):
+                raise MarketplaceError(401, "INVALID_PROXY_SIGNATURE", "Chữ ký kênh BFF không hợp lệ.")
+
+            if not db.record_proxy_nonce(nonce, actor, ts + settings.proxy_sig_ttl_seconds, now):
+                raise MarketplaceError(401, "REPLAY_DETECTED", "Yêu cầu bị từ chối do trùng nonce (replay).")
+
+        _consume_rate_limit(f"{bucket}:wallet:{actor}", limit, marketplace=True)
+        return actor
 
     @app.post("/verify-evidence", response_model=VerifyResponse)
     def verify_evidence(
@@ -714,9 +933,21 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             agent.last_error = f"INSECURE_CONFIG: {', '.join(exc.reasons)}"
             raise
 
-    agent = AutoAgent(get_client, registry, agent_verify, settings.agent_poll_seconds)
+    def reconcile_marketplace_readonly() -> None:
+        cid, esc, active_client = active_chain_context(require_client=False)
+        marketplace.reconcile(client=active_client, chain_id=cid, escrow_address=esc)
+
+    agent = AutoAgent(
+        get_client,
+        registry,
+        agent_verify,
+        settings.agent_poll_seconds,
+        reconcile=reconcile_marketplace_readonly,
+    )
     app.state.agent = agent
     app.state.registry = registry
+    app.state.db = db
+    app.state.marketplace = marketplace
 
     def load_trade(trade_id: int):
         try:
@@ -772,6 +1003,301 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
     @app.get("/agent/status/{trade_id}")
     def agent_status(trade_id: int):
         return {"enabled": settings.agent_auto, **agent.status_for(load_trade(trade_id))}
+
+    # -----------------------------------------------------------------------
+    # Marketplace Endpoints (MKT-002: Listings, Purchase Requests, Bind & Sync)
+    # -----------------------------------------------------------------------
+
+    @app.get("/listings")
+    def get_listings(
+        request: Request,
+        q: Optional[str] = None,
+        category: Optional[str] = None,
+        condition: Optional[str] = None,
+        status: Optional[str] = "ACTIVE",
+        seller: Optional[str] = None,
+        min_price_wei: Optional[str] = None,
+        max_price_wei: Optional[str] = None,
+        in_stock_only: bool = False,
+        sort: str = "newest",
+        page: int = 1,
+        limit: int = 20,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+    ):
+        _consume_rate_limit(resolve_read_rate_key(request, x_api_key, x_authenticated_wallet), 120, marketplace=True)
+        cid, esc, active_client = active_chain_context(require_client=False)
+        return marketplace.list_listings(
+            cid,
+            esc,
+            q=q,
+            category=category,
+            condition=condition,
+            status=status,
+            seller=seller,
+            min_price_wei=min_price_wei,
+            max_price_wei=max_price_wei,
+            in_stock_only=in_stock_only,
+            sort=sort,
+            page=page,
+            limit=limit,
+            client=active_client,
+        )
+
+    @app.get("/listings/{listing_id}")
+    def get_listing_detail(
+        listing_id: str,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+    ):
+        _consume_rate_limit(resolve_read_rate_key(request, x_api_key, x_authenticated_wallet), 120, marketplace=True)
+        cid, esc, active_client = active_chain_context(require_client=False)
+
+        def rep_lookup(wallet: str) -> Optional[int]:
+            if active_client is None or not hasattr(active_client, "reputation_of"):
+                return None
+            try:
+                return int(active_client.reputation_of(wallet))
+            except Exception:
+                return None
+
+        return marketplace.get_listing(cid, esc, listing_id, reputation_lookup=rep_lookup, client=active_client)
+
+    @app.post("/listings", status_code=201)
+    def create_listing_endpoint(
+        body: CreateListingRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        started = time.time()
+        cid, esc, _ = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_create_listing", limit=30,
+        )
+        out = marketplace.create_listing(actor, cid, esc, body, idempotency_key=idempotency_key)
+        log.info("marketplace action=create_listing id=%s duration_ms=%s result=ok", out["id"], int((time.time() - started) * 1000))
+        return out
+
+    @app.patch("/listings/{listing_id}")
+    def update_listing_endpoint(
+        listing_id: str,
+        body: UpdateListingRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_write", limit=60,
+        )
+        out = marketplace.update_listing(actor, cid, esc, listing_id, body, client=active_client)
+        log.info("marketplace action=update_listing id=%s duration_ms=%s result=ok", listing_id, int((time.time() - started) * 1000))
+        return out
+
+    @app.post("/listings/{listing_id}/requests", status_code=201)
+    def create_purchase_request_endpoint(
+        listing_id: str,
+        body: CreatePurchaseRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_request", limit=30,
+        )
+        out = marketplace.create_purchase_request(actor, cid, esc, listing_id, body, idempotency_key=idempotency_key, client=active_client)
+        log.info("marketplace action=create_request id=%s duration_ms=%s result=ok", out["id"], int((time.time() - started) * 1000))
+        return out
+
+    @app.get("/requests")
+    def list_requests_endpoint(
+        request: Request,
+        role: str = "all",
+        status: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+    ):
+        cid, esc, active_client = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_read", limit=120,
+        )
+        return marketplace.list_requests(actor, cid, esc, role=role, status=status, page=page, limit=limit, client=active_client)
+
+    @app.get("/requests/{request_id}")
+    def get_request_endpoint(
+        request_id: str,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+    ):
+        cid, esc, active_client = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_read", limit=120,
+        )
+        return marketplace.get_request(actor, cid, esc, request_id, client=active_client)
+
+    @app.post("/requests/{request_id}/decision")
+    def decide_request_endpoint(
+        request_id: str,
+        body: DecisionRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_write", limit=60,
+        )
+        out = marketplace.decide_request(actor, cid, esc, request_id, body, idempotency_key=idempotency_key, client=active_client)
+        log.info("marketplace action=decide_request id=%s status=%s duration_ms=%s", request_id, out["status"], int((time.time() - started) * 1000))
+        return out
+
+    @app.post("/requests/{request_id}/cancel")
+    def cancel_request_endpoint(
+        request_id: str,
+        request: Request,
+        body: Optional[CancelRequestBody] = None,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=False)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_write", limit=60,
+        )
+        out = marketplace.cancel_request(actor, cid, esc, request_id, body=body, idempotency_key=idempotency_key, client=active_client)
+        log.info("marketplace action=cancel_request id=%s duration_ms=%s result=ok", request_id, int((time.time() - started) * 1000))
+        return out
+
+    @app.post("/requests/{request_id}/bind-trade")
+    def bind_trade_endpoint(
+        request_id: str,
+        body: BindTradeRequest,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+        idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=True)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_write", limit=60,
+        )
+        assert active_client is not None
+        out = marketplace.bind_trade(actor, cid, esc, request_id, body, active_client, idempotency_key=idempotency_key)
+        log.info(
+            "marketplace action=bind_trade request_id=%s trade_id=%s recovered=%s duration_ms=%s",
+            request_id, out.get("trade_id"), out.get("recovered"), int((time.time() - started) * 1000),
+        )
+        return out
+
+    @app.post("/trades/{trade_id}/sync")
+    def sync_trade_endpoint(
+        trade_id: int,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=True)
+        actor = authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_write", limit=60,
+        )
+        assert active_client is not None
+        out = marketplace.sync_trade(actor, cid, esc, trade_id, active_client)
+        log.info(
+            "marketplace action=sync_trade trade_id=%s state=%s duration_ms=%s",
+            trade_id, out.get("synced_state"), int((time.time() - started) * 1000),
+        )
+        return out
+
+    @app.get("/trades/{trade_id}/context")
+    def get_trade_context_endpoint(
+        trade_id: int,
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+    ):
+        _consume_rate_limit(resolve_read_rate_key(request, x_api_key, x_authenticated_wallet), 120, marketplace=True)
+        cid, esc, _ = active_chain_context(require_client=False)
+        return marketplace.get_trade_context(cid, esc, trade_id)
+
+    @app.post("/marketplace/reconcile")
+    def reconcile_marketplace_endpoint(
+        request: Request,
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+    ):
+        started = time.time()
+        cid, esc, active_client = active_chain_context(require_client=False)
+        authenticate_marketplace_actor(
+            request, cid, x_api_key, x_authenticated_wallet, x_authenticated_chain_id,
+            x_auth_timestamp, x_auth_nonce, x_auth_signature, bucket="mkt_reconcile", limit=30,
+        )
+        out = marketplace.reconcile(client=active_client, chain_id=cid, escrow_address=esc)
+        log.info("marketplace action=reconcile duration_ms=%s result=%s", int((time.time() - started) * 1000), out)
+        return out
 
     return app
 

@@ -557,32 +557,73 @@ class TestListingBindingUnit:
 class TestFreeze001BackendFailClosed:
     def test_ac01_insecure_reasons_pure_function(self, tmp_path):
         """AC-01: insecure_reasons returns [] on chain 31337, detects unsafe configs on non-31337."""
-        s_unsafe = _settings(tmp_path, attest_api_key=None, allow_local_hosts=True, enforce_evidence_hash=False)
+        s_unsafe = _settings(
+            tmp_path,
+            attest_api_key=None,
+            allow_local_hosts=True,
+            enforce_evidence_hash=False,
+            require_proxy_signature=False,
+        )
         # On anvil chain 31337, always safe (returns [])
         assert svc.insecure_reasons(s_unsafe, 31337) == []
 
         # On non-31337 (e.g. Fuji 43113)
         # 1. Empty key
-        s_no_key = _settings(tmp_path, attest_api_key=None, allow_local_hosts=False, enforce_evidence_hash=True)
+        s_no_key = _settings(
+            tmp_path,
+            attest_api_key=None,
+            allow_local_hosts=False,
+            enforce_evidence_hash=True,
+            require_proxy_signature=True,
+        )
         r1 = svc.insecure_reasons(s_no_key, 43113)
         assert r1 == ["ATTEST_API_KEY is empty"]
 
         # 2. Allow local hosts
-        s_local = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=True, enforce_evidence_hash=True)
+        s_local = _settings(
+            tmp_path,
+            attest_api_key="valid-key",
+            allow_local_hosts=True,
+            enforce_evidence_hash=True,
+            require_proxy_signature=True,
+        )
         r2 = svc.insecure_reasons(s_local, 43113)
         assert r2 == ["ALLOW_LOCAL_HOSTS is True"]
 
         # 3. Enforce evidence hash is False
-        s_no_hash = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=False, enforce_evidence_hash=False)
+        s_no_hash = _settings(
+            tmp_path,
+            attest_api_key="valid-key",
+            allow_local_hosts=False,
+            enforce_evidence_hash=False,
+            require_proxy_signature=True,
+        )
         r3 = svc.insecure_reasons(s_no_hash, 43113)
         assert r3 == ["ENFORCE_EVIDENCE_HASH is False"]
 
-        # 4. All unsafe flags
-        r_all = svc.insecure_reasons(s_unsafe, 43113)
-        assert len(r_all) == 3
+        # 4. Require proxy signature is False (SEC-02: mandatory on Fuji 43113)
+        s_no_proxy_sig = _settings(
+            tmp_path,
+            attest_api_key="valid-key",
+            allow_local_hosts=False,
+            enforce_evidence_hash=True,
+            require_proxy_signature=False,
+        )
+        r4 = svc.insecure_reasons(s_no_proxy_sig, 43113)
+        assert r4 == ["REQUIRE_PROXY_SIGNATURE is False"]
 
-        # 5. Fully safe config on 43113
-        s_safe = _settings(tmp_path, attest_api_key="valid-key", allow_local_hosts=False, enforce_evidence_hash=True)
+        # 5. All unsafe flags
+        r_all = svc.insecure_reasons(s_unsafe, 43113)
+        assert len(r_all) == 4
+
+        # 6. Fully safe config on 43113
+        s_safe = _settings(
+            tmp_path,
+            attest_api_key="valid-key",
+            allow_local_hosts=False,
+            enforce_evidence_hash=True,
+            require_proxy_signature=True,
+        )
         assert svc.insecure_reasons(s_safe, 43113) == []
 
     def test_ac02_chain43113_empty_key_verify_evidence_returns_503(self, tmp_path):
@@ -696,7 +737,13 @@ class TestFreeze001BackendFailClosed:
             def chain_id(self):
                 return 43113
 
-        s_fuji = _settings(tmp_path, attest_api_key="secret-key", allow_local_hosts=False, enforce_evidence_hash=True)
+        s_fuji = _settings(
+            tmp_path,
+            attest_api_key="secret-key",
+            allow_local_hosts=False,
+            enforce_evidence_hash=True,
+            require_proxy_signature=True,
+        )
         app_fuji = svc.create_app(s_fuji, client=MockFujiClient())
         client_fuji = TestClient(app_fuji)
         r_fuji = client_fuji.post("/verify-evidence", json={
@@ -707,6 +754,43 @@ class TestFreeze001BackendFailClosed:
         }, headers={"X-API-Key": "wrong-key"})
         assert r_fuji.status_code == 401
         assert r_fuji.json() == {"detail": "Invalid or missing API key"}
+
+    def test_sec02_chain43113_requires_proxy_signature_fail_closed(self, tmp_path):
+        """SEC-02: chain 43113 with require_proxy_signature=False returns 503 INSECURE_CONFIG."""
+        class MockFujiClient:
+            def chain_id(self):
+                return 43113
+
+        s_no_sig = _settings(
+            tmp_path,
+            attest_api_key="secret-key",
+            allow_local_hosts=False,
+            enforce_evidence_hash=True,
+            require_proxy_signature=False,
+        )
+        app = svc.create_app(s_no_sig, client=MockFujiClient())
+        client = TestClient(app)
+
+        r_health = client.get("/health")
+        assert r_health.status_code == 200
+        assert r_health.json()["security_toggles"]["insecure_for_chain"] is True
+
+        r_ver = client.post("/verify-evidence", json={
+            "trade_id": 1,
+            "listing_image_url": "ipfs://QmListing",
+            "seller_evidence_url": "ipfs://QmSeller",
+            "buyer_evidence_url": "ipfs://QmBuyer",
+        }, headers={"X-API-Key": "secret-key"})
+        assert r_ver.status_code == 503
+        assert r_ver.json()["error_code"] == "INSECURE_CONFIG"
+
+        r_uris = client.post("/trade/1/uris", json={
+            "role": "listing",
+            "uri": "ipfs://QmListing",
+            "signature": "0x1234",
+        }, headers={"X-API-Key": "secret-key"})
+        assert r_uris.status_code == 503
+        assert r_uris.json()["error_code"] == "INSECURE_CONFIG"
 
     def test_ac06_auto_agent_on_insecure_config(self, tmp_path):
         """AC-06: Auto agent on insecure config does not call attest; /health.agent_error contains INSECURE_CONFIG."""
@@ -770,6 +854,7 @@ class TestFreeze001BackendFailClosed:
             attest_api_key=secret_key,
             allow_local_hosts=False,
             enforce_evidence_hash=True,
+            require_proxy_signature=True,
             ipfs_gateway="https://my-custom-gw.pinata.cloud/ipfs/",
         )
         app = svc.create_app(s, client=MockFujiClient())
