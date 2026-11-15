@@ -4,10 +4,11 @@ import { useAccount, useReadContract } from 'wagmi';
 import { escrowAddress, escrowAbi } from '@/lib/contracts';
 import { TradeData, TradeRole } from '@/types/trade';
 import { formatNonceShort } from '@/lib/format';
+import { safeParseTradeId } from '@/lib/trade-id';
 
 export function useTrade(tradeId: bigint | number | string) {
   const { address } = useAccount();
-  const idBigInt = BigInt(tradeId || 0);
+  const idBigInt = safeParseTradeId(tradeId);
 
   const {
     data,

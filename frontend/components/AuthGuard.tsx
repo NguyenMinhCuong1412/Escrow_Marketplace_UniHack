@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { buildAuthRedirectUrl, isPublicMarketplaceRoute } from '@/lib/auth-routes';
 import { useSwitchChain } from 'wagmi';
 import { ShieldCheck, RefreshCw, AlertTriangle, ArrowRightLeft, Lock } from 'lucide-react';
 
@@ -28,26 +29,23 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     setMounted(true);
   }, []);
 
-  const isAuthRoute = pathname === '/auth' || pathname?.startsWith('/auth/');
+  const isPublicRoute = isPublicMarketplaceRoute(pathname);
   const isBusyChecking = !mounted || isReconnecting || (isWalletConnected && isCheckingSession);
 
-  // Handle automatic redirection for protected Marketplace routes
+  // Chỉ redirect khi truy cập route riêng tư (`/sell`, `/trades`, `/trade/*`, `/admin`, `/profile/*`)
   useEffect(() => {
     if (!mounted) return;
 
-    // If on Marketplace protected route and not authenticated (after reconnecting & session check complete)
-    if (!isAuthRoute && !isBusyChecking && !isAuthenticated) {
-      // If connected on wrong network, let the network mismatch banner/screen below handle switching without bouncing to /auth
+    if (!isPublicRoute && !isBusyChecking && !isAuthenticated) {
       if (isWalletConnected && !isCorrectNetwork) {
         return;
       }
-      const fullPath = pathname + (searchParams.toString() ? `?${searchParams.toString()}` : '');
-      const authUrl = `/auth?returnUrl=${encodeURIComponent(fullPath)}`;
+      const authUrl = buildAuthRedirectUrl(pathname || '/', searchParams.toString());
       router.replace(authUrl);
     }
   }, [
     mounted,
-    isAuthRoute,
+    isPublicRoute,
     isAuthenticated,
     isBusyChecking,
     isWalletConnected,
@@ -57,8 +55,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     router,
   ]);
 
-  // If on /auth or /auth/local: render the auth page directly
-  if (isAuthRoute) {
+  // Khách chưa đăng nhập được tự do duyệt `/`, `/listings/[id]` và `/auth*`
+  if (isPublicRoute) {
     return <>{children}</>;
   }
 

@@ -126,12 +126,105 @@ export function initEip6963Discovery(win?: any) {
   }
 }
 
-function isPureMetaMaskProvider(p: any): boolean {
+export class WalletPendingApprovalError extends Error {
+  readonly code = -32002;
+  readonly walletId: string;
+
+  constructor(walletId: string, cause?: unknown) {
+    const causeMsg =
+      cause && typeof cause === 'object' && 'message' in cause
+        ? String((cause as { message?: unknown }).message || '')
+        : '';
+    super(
+      causeMsg ||
+        `Yêu cầu kết nối đang chờ xác nhận trên ví ${walletId}. Vui lòng mở tiện ích ví trên trình duyệt.`
+    );
+    this.name = 'WalletPendingApprovalError';
+    this.walletId = walletId;
+  }
+}
+
+export function isUserRejectedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const anyErr = err as any;
+  const codes = [
+    anyErr.code,
+    anyErr.cause?.code,
+    anyErr.cause?.cause?.code,
+    anyErr.data?.code,
+    anyErr.data?.originalError?.code,
+    anyErr.error?.code,
+    anyErr.info?.error?.code,
+  ];
+  if (codes.includes(4001) || anyErr.name === 'UserRejectedRequestError') {
+    return true;
+  }
+  const msg = [
+    anyErr.shortMessage,
+    anyErr.message,
+    anyErr.details,
+    anyErr.cause?.shortMessage,
+    anyErr.cause?.message,
+    anyErr.error?.message,
+  ]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join(' ')
+    .toLowerCase();
+  return (
+    msg.includes('rejected') ||
+    msg.includes('denied') ||
+    msg.includes('declined') ||
+    msg.includes('disapproved') ||
+    msg.includes('user canceled') ||
+    msg.includes('user cancelled') ||
+    msg.includes('canceled by user') ||
+    msg.includes('cancelled by user') ||
+    msg.includes('request canceled') ||
+    msg.includes('request cancelled') ||
+    msg.includes('action canceled') ||
+    msg.includes('action cancelled') ||
+    msg.includes('user closed') ||
+    msg.includes('closed by user') ||
+    msg.includes('popup closed') ||
+    msg.includes('đã hủy')
+  );
+}
+
+export function isPendingRequestError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const anyErr = err as any;
+  if (anyErr instanceof WalletPendingApprovalError || anyErr.name === 'WalletPendingApprovalError') {
+    return true;
+  }
+  const codes = [
+    anyErr.code,
+    anyErr.cause?.code,
+    anyErr.data?.code,
+    anyErr.data?.originalError?.code,
+    anyErr.info?.error?.code,
+  ];
+  if (codes.includes(-32002)) {
+    return true;
+  }
+  const msg = String(anyErr.shortMessage || anyErr.message || '').toLowerCase();
+  return (
+    msg.includes('already pending') ||
+    msg.includes('already processing') ||
+    msg.includes('-32002')
+  );
+}
+
+function isCoreProvider(p: any): boolean {
+  return Boolean(p && (p.isAvalanche || p.isCoreWallet || p.isCore));
+}
+
+function isPureMetaMaskProvider(p: any, win?: any): boolean {
   if (!p || !p.isMetaMask) return false;
+  if (win?.avalanche && p === win.avalanche) return false;
   // Core, Rainbow, Coinbase/Base, Rabby, Brave, Phantom etc. often set isMetaMask=true for legacy compatibility.
   // Exclude them so clicking MetaMask only opens the genuine MetaMask extension.
   if (
-    p.isAvalanche ||
+    isCoreProvider(p) ||
     p.isRainbow ||
     p.isCoinbaseWallet ||
     p.isCoinbaseBrowser ||
@@ -146,10 +239,6 @@ function isPureMetaMaskProvider(p: any): boolean {
     return false;
   }
   return true;
-}
-
-function isCoreProvider(p: any): boolean {
-  return Boolean(p && (p.isAvalanche || p.isCoreWallet));
 }
 
 function isRainbowProvider(p: any): boolean {
@@ -179,19 +268,26 @@ export function findWalletProvider(walletId: BrowserWalletId, win?: any): EIP119
   // 1. Check EIP-6963 announced providers
   if (walletId === 'core') {
     const byRdns = allAnnounced.find(
-      (d) => d.info.rdns === 'app.core.extension' || d.info.rdns === 'com.avax.core'
+      (d) =>
+        d.info.rdns === 'app.core.extension' ||
+        d.info.rdns === 'com.avax.core' ||
+        d.info.rdns === 'app.core'
     );
     if (byRdns) return byRdns.provider;
-    const byName = allAnnounced.find(
-      (d) => d.info.name?.toLowerCase().includes('core') || isCoreProvider(d.provider)
-    );
+    const byFlag = allAnnounced.find((d) => isCoreProvider(d.provider));
+    if (byFlag) return byFlag.provider;
+    const byName = allAnnounced.find((d) => {
+      const n = d.info.name?.toLowerCase().trim() || '';
+      return n === 'core' || n.includes('core wallet');
+    });
     if (byName) return byName.provider;
   } else if (walletId === 'metaMask') {
     const byRdns = allAnnounced.find(
       (d) =>
-        d.info.rdns === 'io.metamask' ||
-        d.info.rdns === 'io.metamask.flask' ||
-        d.info.rdns === 'io.metamask.mobile'
+        (d.info.rdns === 'io.metamask' ||
+          d.info.rdns === 'io.metamask.flask' ||
+          d.info.rdns === 'io.metamask.mobile') &&
+        !isCoreProvider(d.provider)
     );
     if (byRdns) return byRdns.provider;
     const byName = allAnnounced.find(
@@ -241,14 +337,14 @@ export function findWalletProvider(walletId: BrowserWalletId, win?: any): EIP119
   }
 
   if (walletId === 'metaMask') {
-    const inArray = providersList.find(isPureMetaMaskProvider);
+    const inArray = providersList.find((p) => isPureMetaMaskProvider(p, targetWin));
     if (inArray) return inArray as EIP1193Provider;
     // Also check if window.ethereum.providerMap exists (used by some Coinbase/multi-wallet shims)
     if (eth?.providerMap instanceof Map && eth.providerMap.has('MetaMask')) {
       const mapped = eth.providerMap.get('MetaMask');
-      if (isPureMetaMaskProvider(mapped)) return mapped as EIP1193Provider;
+      if (isPureMetaMaskProvider(mapped, targetWin)) return mapped as EIP1193Provider;
     }
-    if (isPureMetaMaskProvider(eth)) return eth as EIP1193Provider;
+    if (isPureMetaMaskProvider(eth, targetWin)) return eth as EIP1193Provider;
     return undefined;
   }
 
@@ -421,6 +517,258 @@ function extractAccountsFromPermissions(permissions: any): string[] {
   return extracted;
 }
 
+const FOCUS_RETURN_GRACE_MS = 850;
+const ETH_ACCOUNTS_PROBE_TIMEOUT_MS = 500;
+
+const pendingConnectRequests = new WeakMap<object, Promise<string[]>>();
+const activeConnectCancels = new Map<string, () => void>();
+
+/**
+ * Cancels any in-flight browser wallet connection waiter tracked by this app
+ * so closing the modal or switching wallets never leaves dangling listeners
+ * or poisoned retry promises (common if an extension leaves eth_requestAccounts unsettled).
+ */
+export function cancelPendingConnectRequest(walletId?: string): void {
+  if (walletId) {
+    const cancel = activeConnectCancels.get(walletId);
+    if (cancel) {
+      activeConnectCancels.delete(walletId);
+      cancel();
+    }
+    return;
+  }
+
+  const cancels = Array.from(activeConnectCancels.values());
+  activeConnectCancels.clear();
+  for (const cancel of cancels) {
+    cancel();
+  }
+}
+
+function normalizeRawAccountList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((a): a is string => typeof a === 'string' && a.length > 0);
+}
+
+async function probeAuthorizedAccounts(provider: EIP1193Provider): Promise<string[]> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const accounts = await Promise.race([
+      provider.request({ method: 'eth_accounts' }).catch(() => []),
+      new Promise<string[]>((resolve) => {
+        timeoutId = setTimeout(() => resolve([]), ETH_ACCOUNTS_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+    return normalizeRawAccountList(accounts);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+async function requestAccountsSafely(
+  walletId: string,
+  provider: EIP1193Provider,
+  winOverride?: any
+): Promise<string[]> {
+  // 1. Reuse already-authorized accounts if the extension is unlocked and already granted permission.
+  //    This avoids triggering redundant prompts or -32002 already-pending errors on Core/MetaMask.
+  const alreadyPermitted = (await provider
+    .request({ method: 'eth_accounts' })
+    .catch(() => [])) as string[];
+  if (Array.isArray(alreadyPermitted) && alreadyPermitted.length > 0) {
+    return alreadyPermitted;
+  }
+
+  // 2. Deduplicate concurrent eth_requestAccounts calls for the same extension provider.
+  const existingInFlight = pendingConnectRequests.get(provider as object);
+  if (existingInFlight) {
+    return existingInFlight;
+  }
+
+  const targetWin = winOverride ?? (typeof window !== 'undefined' ? window : undefined);
+  const canWatchWindowFocus = Boolean(
+    targetWin &&
+      typeof targetWin.addEventListener === 'function' &&
+      typeof targetWin.removeEventListener === 'function'
+  );
+  const targetDoc =
+    targetWin?.document &&
+    typeof targetWin.document.addEventListener === 'function' &&
+    typeof targetWin.document.removeEventListener === 'function'
+      ? targetWin.document
+      : undefined;
+
+  const isPageFocused = () => {
+    if (targetWin?.document?.visibilityState === 'hidden') return false;
+    if (typeof targetWin?.document?.hasFocus === 'function') {
+      return Boolean(targetWin.document.hasFocus());
+    }
+    return true;
+  };
+
+  const inFlight = new Promise<string[]>((resolve, reject) => {
+    let settled = false;
+    let sawBlur = !isPageFocused();
+    let focusGraceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearFocusTimer = () => {
+      if (focusGraceTimer !== null) {
+        clearTimeout(focusGraceTimer);
+        focusGraceTimer = null;
+      }
+    };
+
+    const onAccountsChanged = (accounts: string[]) => {
+      if (settled || !Array.isArray(accounts) || accounts.length === 0) return;
+      finishResolve(accounts);
+    };
+
+    const onBlur = () => {
+      if (settled) return;
+      sawBlur = true;
+      clearFocusTimer();
+    };
+
+    const scheduleFocusCheck = () => {
+      if (settled || !sawBlur) return;
+      clearFocusTimer();
+      focusGraceTimer = setTimeout(async () => {
+        focusGraceTimer = null;
+        if (settled || !isPageFocused()) return;
+
+        // If the extension (notably Core MV3) closed its popup silently without settling
+        // eth_requestAccounts, inspect eth_accounts once focus has remained back on our page.
+        const postCheck = await probeAuthorizedAccounts(provider);
+        if (settled) return;
+        if (postCheck.length > 0) {
+          finishResolve(postCheck);
+          return;
+        }
+        if (!isPageFocused()) return;
+
+        finishReject(
+          new UserRejectedRequestError(new Error(`Đã hủy yêu cầu kết nối trên ví ${walletId}.`))
+        );
+      }, FOCUS_RETURN_GRACE_MS);
+    };
+
+    const onFocus = () => {
+      scheduleFocusCheck();
+    };
+
+    const onVisibilityChange = () => {
+      if (settled) return;
+      if (targetWin?.document?.visibilityState === 'hidden') {
+        sawBlur = true;
+        clearFocusTimer();
+      } else if (sawBlur && isPageFocused()) {
+        scheduleFocusCheck();
+      }
+    };
+
+    const cancel = () => {
+      finishReject(
+        new UserRejectedRequestError(new Error(`Đã hủy yêu cầu kết nối trên ví ${walletId}.`))
+      );
+    };
+
+    function cleanup() {
+      settled = true;
+      clearFocusTimer();
+      pendingConnectRequests.delete(provider as object);
+      if (activeConnectCancels.get(walletId) === cancel) {
+        activeConnectCancels.delete(walletId);
+      }
+      if (typeof provider.removeListener === 'function') {
+        provider.removeListener('accountsChanged', onAccountsChanged);
+      }
+      if (canWatchWindowFocus) {
+        targetWin.removeEventListener('blur', onBlur);
+        targetWin.removeEventListener('focus', onFocus);
+      }
+      if (targetDoc) {
+        targetDoc.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+    }
+
+    function finishResolve(accounts: string[]) {
+      if (settled) return;
+      cleanup();
+      resolve(accounts);
+    }
+
+    function finishReject(err: unknown) {
+      if (settled) return;
+      cleanup();
+      reject(err);
+    }
+
+    activeConnectCancels.set(walletId, cancel);
+
+    if (typeof provider.on === 'function') {
+      provider.on('accountsChanged', onAccountsChanged);
+    }
+    if (canWatchWindowFocus) {
+      targetWin.addEventListener('blur', onBlur);
+      targetWin.addEventListener('focus', onFocus);
+    }
+    if (targetDoc) {
+      targetDoc.addEventListener('visibilitychange', onVisibilityChange);
+    }
+
+    Promise.resolve()
+      .then(() => provider.request({ method: 'eth_requestAccounts' }))
+      .then(async (rawRequested) => {
+        if (settled) return;
+        const requested = normalizeRawAccountList(rawRequested);
+        if (requested.length > 0) {
+          finishResolve(requested);
+          return;
+        }
+
+        const postCheck = await probeAuthorizedAccounts(provider);
+        if (settled) return;
+        if (postCheck.length > 0) {
+          finishResolve(postCheck);
+          return;
+        }
+
+        finishReject(
+          new UserRejectedRequestError(new Error(`Đã hủy yêu cầu kết nối trên ví ${walletId}.`))
+        );
+      })
+      .catch(async (err: any) => {
+        if (settled) return;
+        if (isUserRejectedError(err)) {
+          finishReject(new UserRejectedRequestError(err));
+          return;
+        }
+        if (isPendingRequestError(err)) {
+          // Double-check whether Core/MetaMask just finished authorizing concurrently
+          const postCheck = await probeAuthorizedAccounts(provider);
+          if (settled) return;
+          if (postCheck.length > 0) {
+            finishResolve(postCheck);
+            return;
+          }
+          finishReject(new WalletPendingApprovalError(walletId, err));
+          return;
+        }
+        finishReject(err);
+      });
+  });
+
+  pendingConnectRequests.set(provider as object, inFlight);
+  // Edge case: if provider.request synchronously settled inFlight, ensure the WeakMap does not keep it.
+  inFlight.then(
+    () => pendingConnectRequests.delete(provider as object),
+    () => pendingConnectRequests.delete(provider as object)
+  );
+  return inFlight;
+}
+
 /**
  * Creates a dedicated Wagmi connector for a specific browser wallet (Core, MetaMask, Rainbow, Base)
  * with runtime EIP-6963 discovery and multi-account switching support.
@@ -489,29 +837,25 @@ export function createBrowserWalletConnector(meta: WalletOptionMeta, winOverride
         }
 
         if (!accounts.length && !isReconnecting) {
-          try {
-            const requested = (await provider.request({
-              method: 'eth_requestAccounts',
-            })) as string[];
+          const requested = await requestAccountsSafely(walletId, provider, winOverride);
 
-            // Also query eth_accounts in case the wallet holds multiple authorized accounts
-            const allPermitted = (await provider
-              .request({ method: 'eth_accounts' })
-              .catch(() => [])) as string[];
+          // Also query eth_accounts in case the wallet holds multiple authorized accounts
+          const allPermitted = (await provider
+            .request({ method: 'eth_accounts' })
+            .catch(() => [])) as string[];
 
-            const combined = [...(requested || []), ...(allPermitted || [])];
-            const currentSelected = getSelectedWalletAccount(walletId) || requested?.[0];
-            if (currentSelected) {
-              setSelectedWalletAccount(walletId, currentSelected);
-            }
-            accounts = orderAccountsWithSelected(combined, currentSelected);
-            knownAccountsMap.set(walletId, accounts);
-          } catch (err: any) {
-            if (err?.code === 4001 || err?.message?.toLowerCase()?.includes('rejected')) {
-              throw new UserRejectedRequestError(err);
-            }
-            throw err;
+          const combined = [...(requested || []), ...(allPermitted || [])];
+          const currentSelected = getSelectedWalletAccount(walletId) || requested?.[0];
+          if (currentSelected) {
+            setSelectedWalletAccount(walletId, currentSelected);
           }
+          accounts = orderAccountsWithSelected(combined, currentSelected);
+          if (accounts.length === 0) {
+            throw new UserRejectedRequestError(
+              new Error(`Đã hủy yêu cầu kết nối trên ví ${walletId}.`)
+            );
+          }
+          knownAccountsMap.set(walletId, accounts);
         }
 
         attachListeners(provider, this);
@@ -589,16 +933,27 @@ export function createBrowserWalletConnector(meta: WalletOptionMeta, winOverride
           });
           return chain;
         } catch (err: any) {
-          if (err?.code === 4902 || err?.data?.originalError?.code === 4902) {
+          const errMsg = String(err?.message || '').toLowerCase();
+          const chainMissing =
+            err?.code === 4902 ||
+            err?.cause?.code === 4902 ||
+            err?.data?.originalError?.code === 4902 ||
+            errMsg.includes('unrecognized chain') ||
+            errMsg.includes('not added');
+
+          if (chainMissing) {
             try {
               const blockExplorerUrls = addEthereumChainParameter?.blockExplorerUrls
                 ? addEthereumChainParameter.blockExplorerUrls
                 : chain.blockExplorers?.default?.url
                   ? [chain.blockExplorers.default.url]
                   : [];
+              const defaultRpc = chain.rpcUrls.default?.http?.[0];
               const rpcUrls = addEthereumChainParameter?.rpcUrls?.length
                 ? addEthereumChainParameter.rpcUrls
-                : [chain.rpcUrls.default?.http?.[0] ?? ''];
+                : defaultRpc
+                  ? [defaultRpc]
+                  : [];
 
               await provider.request({
                 method: 'wallet_addEthereumChain',
@@ -614,14 +969,20 @@ export function createBrowserWalletConnector(meta: WalletOptionMeta, winOverride
               });
               return chain;
             } catch (addError: any) {
-              if (addError?.code === 4001) {
+              if (isUserRejectedError(addError)) {
                 throw new UserRejectedRequestError(addError);
+              }
+              if (isPendingRequestError(addError)) {
+                throw new WalletPendingApprovalError(walletId, addError);
               }
               throw new SwitchChainError(addError);
             }
           }
-          if (err?.code === 4001) {
+          if (isUserRejectedError(err)) {
             throw new UserRejectedRequestError(err);
+          }
+          if (isPendingRequestError(err)) {
+            throw new WalletPendingApprovalError(walletId, err);
           }
           throw new SwitchChainError(err);
         }
@@ -711,6 +1072,7 @@ export async function requestWalletAccountSelection(
   }
 
   let permissionAccounts: string[] = [];
+  let pendingError: unknown = null;
 
   // 1. Try EIP-2255 wallet_requestPermissions to open the wallet's account picker popup
   try {
@@ -721,19 +1083,27 @@ export async function requestWalletAccountSelection(
     permissionAccounts = extractAccountsFromPermissions(permissions);
   } catch (err: any) {
     // If user explicitly rejected the permission prompt, rethrow
-    if (err?.code === 4001 || err?.message?.toLowerCase()?.includes('rejected')) {
+    if (isUserRejectedError(err)) {
       throw new UserRejectedRequestError(err);
     }
-    // Otherwise (e.g. Core Wallet returning -32601 Method not found), fall back to eth_requestAccounts
+    if (isPendingRequestError(err)) {
+      pendingError = err;
+    }
+    // Otherwise (e.g. Core Wallet returning -32601 Method not found), fall back to eth_accounts / eth_requestAccounts
   }
 
-  // 2. Query eth_requestAccounts and eth_accounts to get all authorized accounts
-  const requested = ((await provider
-    .request({ method: 'eth_requestAccounts' })
-    .catch(() => [])) as string[]) || [];
+  // 2. Query eth_accounts first; only invoke eth_requestAccounts when no authorized account is returned yet
   const ethAccounts = ((await provider
     .request({ method: 'eth_accounts' })
     .catch(() => [])) as string[]) || [];
+
+  let requested: string[] = [];
+  if (permissionAccounts.length === 0 && ethAccounts.length === 0) {
+    if (pendingError) {
+      throw new WalletPendingApprovalError(walletId, pendingError);
+    }
+    requested = await requestAccountsSafely(walletId, provider);
+  }
 
   const allRaw = [...permissionAccounts, ...requested, ...ethAccounts];
   const uniqueAccounts = orderAccountsWithSelected(allRaw, null);

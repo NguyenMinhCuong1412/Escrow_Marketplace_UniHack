@@ -12,6 +12,8 @@ import { LOCAL_WALLET_CONNECTOR_ID } from '@/lib/local-wallet/connector';
 import { buildAuthChallengeMessage } from '@/lib/auth-challenge';
 import {
   getKnownWalletAccounts,
+  isPendingRequestError,
+  isUserRejectedError,
   orderAccountsWithSelected,
   requestWalletAccountSelection,
   selectWalletAccount,
@@ -52,7 +54,7 @@ export function useAuthSession(): AuthSessionContextValue {
 }
 
 function useAuthSessionController() {
-  const { address, addresses, isConnected, status, chain, connector } = useAccount();
+  const { address, addresses, isConnected, status, chain, chainId, connector } = useAccount();
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
   const { switchChainAsync } = useSwitchChain();
@@ -197,8 +199,13 @@ function useAuthSessionController() {
   }, [address, applySessionState]);
 
   const isLocalWalletUnlocked = isLocalWallet ? localUnlocked : true;
-  const isCorrectNetwork = !chain || chain.id === 43113 || chain.id === 31337;
+  const effectiveChainId = chain?.id ?? chainId;
   const isWalletConnected = status === 'connected' && !!address;
+  const isCorrectNetwork =
+    !isWalletConnected ||
+    effectiveChainId === undefined ||
+    effectiveChainId === 43113 ||
+    effectiveChainId === 31337;
   const isReconnecting = status === 'reconnecting' || status === 'connecting';
 
   // Require both wallet connection + correct network + valid server session for current address
@@ -225,15 +232,18 @@ function useAuthSessionController() {
       setIsSigningIn(true);
 
       // Step 1: Ensure wallet is on supported network (Avalanche Fuji 43113 or Anvil 31337)
-      let activeChainId = chain?.id || targetChain.id;
-      if (!isLocalWallet && chain && chain.id !== 43113 && chain.id !== 31337) {
+      let activeChainId = effectiveChainId ?? targetChain.id;
+      if (!isLocalWallet && effectiveChainId !== 43113 && effectiveChainId !== 31337) {
         try {
           const switched = await switchChainAsync({ chainId: targetChain.id });
           activeChainId = switched?.id || targetChain.id;
         } catch (switchErr: any) {
-          const msg = String(switchErr?.shortMessage || switchErr?.message || '');
-          if (switchErr?.code === 4001 || msg.toLowerCase().includes('rejected')) {
+          if (isUserRejectedError(switchErr)) {
             setAuthError(`Bạn cần chuyển sang mạng ${targetChain.name} (${targetChain.id}) để tiếp tục.`);
+          } else if (isPendingRequestError(switchErr)) {
+            setAuthError(
+              'Ví đang có yêu cầu chuyển mạng chờ xác nhận. Vui lòng mở biểu tượng tiện ích ví trên thanh công cụ trình duyệt.'
+            );
           } else {
             setAuthError(`Không thể chuyển sang mạng ${targetChain.name}. Vui lòng đổi mạng trong ví.`);
           }
@@ -284,13 +294,12 @@ function useAuthSessionController() {
       return true;
     } catch (err: any) {
       const msg = String(err?.shortMessage || err?.message || '');
-      if (
-        err?.code === 4001 ||
-        msg.toLowerCase().includes('rejected') ||
-        msg.toLowerCase().includes('denied') ||
-        msg.toLowerCase().includes('user canceled')
-      ) {
+      if (isUserRejectedError(err)) {
         setAuthError('Bạn đã hủy yêu cầu ký xác thực trên ví.');
+      } else if (isPendingRequestError(err)) {
+        setAuthError(
+          'Ví đang có yêu cầu ký xác thực chờ xử lý. Vui lòng mở biểu tượng tiện ích ví trên trình duyệt để xác nhận.'
+        );
       } else {
         setAuthError(msg || 'Không thể hoàn tất ký xác thực phiên làm việc.');
       }
@@ -298,7 +307,7 @@ function useAuthSessionController() {
     } finally {
       setIsSigningIn(false);
     }
-  }, [address, chain, isLocalWallet, switchChainAsync, signMessageAsync, applySessionState]);
+  }, [address, effectiveChainId, isLocalWallet, switchChainAsync, signMessageAsync, applySessionState]);
 
   /**
    * Switches the active account among already-authorized accounts in the wallet.
@@ -348,12 +357,12 @@ function useAuthSessionController() {
       return result.activeAddress;
     } catch (err: any) {
       const msg = String(err?.shortMessage || err?.message || '');
-      if (
-        err?.code === 4001 ||
-        msg.toLowerCase().includes('rejected') ||
-        msg.toLowerCase().includes('denied')
-      ) {
+      if (isUserRejectedError(err)) {
         setAuthError('Đã hủy yêu cầu chọn tài khoản từ ví.');
+      } else if (isPendingRequestError(err)) {
+        setAuthError(
+          'Ví đang có yêu cầu chờ xác nhận. Vui lòng mở biểu tượng tiện ích ví trên thanh công cụ trình duyệt.'
+        );
       } else {
         setAuthError(msg || 'Không thể mở hộp thoại chọn tài khoản của ví.');
       }

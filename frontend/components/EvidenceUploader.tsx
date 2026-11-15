@@ -11,8 +11,9 @@ import {
   getStoredEvidenceUri,
   ipfsToGatewayUrl,
 } from '@/lib/ipfs';
-import { getReadableError } from '@/lib/errors';
+import { notifyWalletActionError } from '@/lib/wallet-toast';
 import { registerUri } from '@/lib/backend';
+import { syncMarketplaceTrade } from '@/lib/marketplace';
 import {
   UploadCloud,
   FileCheck,
@@ -130,12 +131,18 @@ export const EvidenceUploader: React.FC<EvidenceUploaderProps> = ({
         toast.warning('Chưa báo được đường dẫn cho AI Agent — có thể chạy xác thực thủ công.', { duration: 6000 });
       }
 
+      // Đồng bộ trạng thái sang Marketplace (best-effort, không chặn luồng nếu là P2P trade)
+      try {
+        await syncMarketplaceTrade(tradeId);
+      } catch {
+        // ignore
+      }
+
       toast.success('Đã nộp bằng chứng on-chain thành công!', { id: toastId });
       removeFile();
       onSuccess?.();
     } catch (err: any) {
-      console.error('Submit evidence failed:', err);
-      toast.error(`Nộp bằng chứng thất bại: ${getReadableError(err)}`, { id: toastId });
+      notifyWalletActionError(err, 'Nộp bằng chứng thất bại', { toastId, context: 'EvidenceUploader' });
     } finally {
       setIsUploading(false);
     }

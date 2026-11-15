@@ -6,6 +6,7 @@ import { useTrade } from '@/hooks/useTrade';
 import { getAgentStatus, listingMessage, registerUri, type AgentStatus } from '@/lib/backend';
 import { chainId, escrowAddress } from '@/lib/contracts';
 import { getStoredListingUri, setStoredListingUri } from '@/lib/ipfs';
+import { notifyWalletActionError } from '@/lib/wallet-toast';
 import { Bot, CheckCircle2, Loader2, AlertTriangle, Clock, ChevronDown, FileCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -81,8 +82,7 @@ export const AgentStatusCard: React.FC<AgentStatusCardProps> = ({ tradeId, onAtt
       const updated = await getAgentStatus(tradeId);
       setStatus(updated);
     } catch (err: any) {
-      console.error('Sign listing failed:', err);
-      toast.error(`Ký xác nhận thất bại: ${err?.message || 'Lỗi ký'}`, { id: toastId });
+      notifyWalletActionError(err, 'Ký xác nhận thất bại', { toastId, context: 'SignListing' });
     } finally {
       setIsSigningListing(false);
     }

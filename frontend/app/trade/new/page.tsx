@@ -7,7 +7,7 @@ import { isAddress, parseEther } from 'viem';
 import { escrowAddress, escrowAbi, chainId } from '@/lib/contracts';
 import { targetChain } from '@/lib/wagmi';
 import { useReputation } from '@/hooks/useReputation';
-import { getReadableError } from '@/lib/errors';
+import { notifyWalletActionError } from '@/lib/wallet-toast';
 import { uploadToIpfs, validateEvidenceFile, setStoredListingUri } from '@/lib/ipfs';
 import { listingMessage, registerUri } from '@/lib/backend';
 import {
@@ -206,9 +206,7 @@ export default function CreateTradePage() {
       // AC-01: tx confirm -> redirect /trade/[id]
       router.push(`/trade/${createdTradeId}`);
     } catch (err: any) {
-      console.error('Error creating trade:', err);
-      const readable = getReadableError(err);
-      toast.error(`Tạo giao dịch thất bại: ${readable}`, { id: toastId });
+      notifyWalletActionError(err, 'Tạo giao dịch thất bại', { toastId, context: 'CreateTrade' });
     } finally {
       setIsSubmitting(false);
     }

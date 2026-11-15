@@ -8,7 +8,7 @@ import { targetChain } from '@/lib/wagmi';
 import { StateBadge } from '@/components/StateBadge';
 import { AddressDisplay } from '@/components/AddressDisplay';
 import { AvaxAmount } from '@/components/AvaxAmount';
-import { getReadableError } from '@/lib/errors';
+import { notifyWalletActionError } from '@/lib/wallet-toast';
 import { TradeData } from '@/types/trade';
 import {
   Gavel,
@@ -193,9 +193,7 @@ export default function AdminDisputePage() {
       setConfirmModal({ open: false, trade: null, action: 'split' });
       await refetchAll();
     } catch (err: any) {
-      console.error('Resolve dispute failed:', err);
-      const readable = getReadableError(err);
-      toast.error(`Thất bại: ${readable}`, { id: toastId });
+      notifyWalletActionError(err, 'Thất bại', { toastId, context: 'ResolveDispute' });
     } finally {
       setIsSubmitting(false);
     }
@@ -226,9 +224,7 @@ export default function AdminDisputePage() {
       toast.success(`Đã chuyển giao dịch #${tradeId.toString()} sang trạng thái Disputed!`, { id: toastId });
       await refetchAll();
     } catch (err: any) {
-      console.error('File complaint error:', err);
-      const readable = getReadableError(err);
-      toast.error(`Thất bại: ${readable}`, { id: toastId });
+      notifyWalletActionError(err, 'Thất bại', { toastId, context: 'FileComplaint' });
     } finally {
       setIsSubmitting(false);
     }
@@ -589,6 +585,11 @@ export default function AdminDisputePage() {
                     <div className="text-xs text-[#525866] flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                       Giao dịch đã được phân bổ cọc và hoàn tất (Resolved).
+                    </div>
+                  ) : trade.state === 5 ? (
+                    <div className="text-xs text-[#525866] flex items-center gap-2">
+                      <XCircle className="w-4 h-4 text-[#525866]" />
+                      Giao dịch đã hủy (Cancelled). Không còn ở trạng thái đang tiến hành.
                     </div>
                   ) : (
                     <div className="text-xs text-[#525866] flex items-center gap-2">

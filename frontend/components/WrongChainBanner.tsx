@@ -7,16 +7,17 @@ import { AlertTriangle, ArrowRightLeft } from 'lucide-react';
 
 export const WrongChainBanner: React.FC = () => {
   const [mounted, setMounted] = useState(false);
-  const { isConnected, chain } = useAccount();
+  const { isConnected, chain, chainId } = useAccount();
   const { switchChain, isPending } = useSwitchChain();
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  if (!mounted || !isConnected || !chain) return null;
+  const activeChainId = chain?.id ?? chainId;
+  if (!mounted || !isConnected || activeChainId === undefined) return null;
 
-  const isWrongChain = chain.id !== targetChain.id;
+  const isWrongChain = activeChainId !== targetChain.id;
 
   if (!isWrongChain) return null;
 
@@ -26,7 +27,7 @@ export const WrongChainBanner: React.FC = () => {
         <div className="flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 flex-shrink-0 animate-bounce" />
           <span>
-            <strong>Sai mạng kết nối:</strong> Ví của bạn đang ở <strong>{chain.name}</strong> (Chain ID: {chain.id}). Ứng dụng yêu cầu mạng <strong>{targetChain.name}</strong> (Chain ID: {targetChain.id}).
+            <strong>Sai mạng kết nối:</strong> Ví của bạn đang ở <strong>{chain?.name || `Mạng #${activeChainId}`}</strong> (Chain ID: {activeChainId}). Ứng dụng yêu cầu mạng <strong>{targetChain.name}</strong> (Chain ID: {targetChain.id}).
           </span>
         </div>
         <button
