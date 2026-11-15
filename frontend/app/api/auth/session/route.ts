@@ -7,6 +7,7 @@ import {
   SESSION_EXPIRY_MS,
   NONCE_EXPIRY_MS,
   TARGET_CHAINS,
+  SessionConfigError,
   createSessionToken,
   verifySessionFromRequest,
 } from '@/lib/auth-session';
@@ -111,8 +112,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Xác thực chữ ký thất bại.' }, { status: 401 });
   }
 
-  // Create session token and set HttpOnly cookie
-  const token = createSessionToken(formattedAddress, Number(chainId));
+  // Create session token and set HttpOnly cookie (fail-closed if SESSION_SECRET missing on non-31337)
+  let token: string;
+  try {
+    token = createSessionToken(formattedAddress, Number(chainId));
+  } catch (err: any) {
+    if (err instanceof SessionConfigError || err?.name === 'SessionConfigError') {
+      return NextResponse.json(
+        {
+          error_code: 'SESSION_MISCONFIGURED',
+          error: 'Dịch vụ xác thực phiên chưa được cấu hình bảo mật (thiếu SESSION_SECRET).',
+        },
+        { status: 503 }
+      );
+    }
+    throw err;
+  }
   const isProd = process.env.NODE_ENV === 'production';
 
   const response = NextResponse.json({

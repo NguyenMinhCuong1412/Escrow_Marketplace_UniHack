@@ -12,7 +12,7 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY ai-pipeline/evidence_check.py ai-pipeline/evidence_check.py
-COPY backend/attest_service.py backend/chain.py backend/
+COPY backend/attest_service.py backend/auto_agent.py backend/chain.py backend/db.py backend/listings.py backend/
 COPY backend/abi backend/abi
 # Địa chỉ deploy (nếu có) — có thể thay bằng biến ESCROW_ADDRESS
 COPY contracts/deployments contracts/deployments

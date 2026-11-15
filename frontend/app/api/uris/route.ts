@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifySessionFromRequest } from '@/lib/auth-session';
+import { validateCsrfRequest } from '@/lib/marketplace-bff';
 
 // Proxy server-side tới backend POST /trade/{id}/uris — báo cho AI Agent tự động biết
 // đường dẫn ipfs:// của ảnh niêm yết / bằng chứng. ATTEST_API_KEY chỉ đọc ở server.
@@ -16,6 +17,9 @@ function backendBaseUrl(): string {
 }
 
 export async function POST(request: Request) {
+  const csrfError = validateCsrfRequest(request);
+  if (csrfError) return csrfError;
+
   // 1. Kiểm tra session xác thực ví
   const session = verifySessionFromRequest(request);
   if (!session) {

@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 from web3 import Web3
-from web3.exceptions import ContractLogicError
+from web3.exceptions import ContractLogicError, TransactionNotFound
+from web3.logs import DISCARD
 
 log = logging.getLogger("attest.chain")
 
@@ -66,6 +67,34 @@ class ChainError(Exception):
     """Lỗi khi gọi RPC / transaction revert — map thành HTTP 502."""
 
 
+class ChainTxNotFound(ChainError):
+    """Không tìm thấy transaction receipt trên RPC — map thành HTTP 404."""
+
+
+class ChainValidationError(Exception):
+    """Receipt/event không khớp hợp đồng Escrow — map thành HTTP 422."""
+
+    def __init__(self, error_code: str, message: str):
+        self.error_code = error_code
+        super().__init__(message)
+
+
+@dataclass
+class CreatedTradeReceipt:
+    chain_id: int
+    escrow_address: str
+    tx_hash: str
+    tx_to: str
+    status: int
+    trade_id: int
+    seller: str
+    buyer: str
+    item_value: int
+    nonce: str
+    block_number: int
+    trade: Trade
+
+
 def _hex32(b: bytes) -> str:
     return Web3.to_hex(b).lower() if b else "0x" + "00" * 32
 
@@ -76,23 +105,25 @@ def load_abi(path: str | Path) -> list:
 
 
 class EscrowClient:
-    def __init__(self, rpc_url: str, escrow_address: str, abi: list, agent_private_key: str,
+    def __init__(self, rpc_url: str, escrow_address: str, abi: list, agent_private_key: Optional[str] = None,
                  tx_timeout: int = 120):
         self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
         self.escrow = self.w3.eth.contract(address=Web3.to_checksum_address(escrow_address), abi=abi)
-        self.account = self.w3.eth.account.from_key(agent_private_key)
+        self.account = self.w3.eth.account.from_key(agent_private_key) if agent_private_key else None
         self.tx_timeout = tx_timeout
         # Nonce giao dịch của ví agent: tuần tự hoá để 2 request song song không đụng nonce.
         self._tx_lock = threading.Lock()
 
     @property
     def agent_address(self) -> str:
-        return self.account.address
+        return self.account.address if self.account else ""
 
     def chain_id(self) -> int:
         return int(self.w3.eth.chain_id)
 
     def agent_balance(self) -> int:
+        if not self.account:
+            raise ChainError("AGENT_PRIVATE_KEY is required for agent_balance()")
         return int(self.w3.eth.get_balance(self.account.address))
 
     def onchain_agent(self) -> str:
@@ -125,7 +156,81 @@ class EscrowClient:
     def latest_timestamp(self) -> int:
         return int(self.w3.eth.get_block("latest")["timestamp"])
 
+    def verify_create_trade_tx(self, tx_hash: str, expected_trade_id: Optional[int] = None) -> CreatedTradeReceipt:
+        """Đọc receipt + TradeCreated + getTrade() để xác thực giao dịch createTrade on-chain."""
+        try:
+            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+        except TransactionNotFound as e:
+            raise ChainTxNotFound(f"Transaction receipt not found: {tx_hash}") from e
+        except Exception as e:
+            raise ChainError(f"get_transaction_receipt failed: {e}") from e
+
+        if not receipt:
+            raise ChainTxNotFound(f"Transaction receipt not found: {tx_hash}")
+
+        if int(receipt.get("status", 0)) != 1:
+            raise ChainValidationError("TRANSACTION_REVERTED", "Giao dịch createTrade đã bị revert trên blockchain.")
+
+        expected_escrow = self.escrow.address.lower()
+        tx_to = (receipt.get("to") or "").lower()
+        if not tx_to or tx_to != expected_escrow:
+            raise ChainValidationError(
+                "WRONG_CONTRACT_ADDRESS",
+                "Giao dịch không gửi tới hợp đồng Escrow đang hoạt động.",
+            )
+
+        decoded = self.escrow.events.TradeCreated().process_receipt(receipt, errors=DISCARD)
+        matching = [
+            ev for ev in decoded
+            if str(ev.get("address", "")).lower() == expected_escrow
+        ]
+        if len(matching) != 1:
+            raise ChainValidationError(
+                "MISSING_TRADE_CREATED_EVENT",
+                "Receipt không chứa đúng một sự kiện TradeCreated từ hợp đồng Escrow.",
+            )
+
+        args = matching[0]["args"]
+        ev_trade_id = int(args["tradeId"])
+        ev_seller = str(args["seller"]).lower()
+        ev_buyer = str(args["buyer"]).lower()
+        ev_item_value = int(args["itemValue"])
+        ev_nonce = _hex32(args["nonce"])
+
+        if expected_trade_id is not None and ev_trade_id != expected_trade_id:
+            raise ChainValidationError(
+                "TRADE_ID_MISMATCH",
+                "trade_id trong yêu cầu không khớp với sự kiện TradeCreated trên chain.",
+            )
+
+        trade = self.get_trade(ev_trade_id)
+        if not trade.exists:
+            raise ChainValidationError("TRADE_NOT_FOUND_ONCHAIN", "Không tìm thấy Trade tương ứng trên hợp đồng.")
+        if (
+            trade.seller.lower() != ev_seller
+            or trade.buyer.lower() != ev_buyer
+            or trade.item_value != ev_item_value
+        ):
+            raise ChainValidationError("TRADE_EVENT_STATE_MISMATCH", "Dữ liệu getTrade() không khớp sự kiện TradeCreated.")
+
+        return CreatedTradeReceipt(
+            chain_id=self.chain_id(),
+            escrow_address=expected_escrow,
+            tx_hash=Web3.to_hex(receipt.get("transactionHash") or tx_hash).lower(),
+            tx_to=tx_to,
+            status=int(receipt["status"]),
+            trade_id=ev_trade_id,
+            seller=ev_seller,
+            buyer=ev_buyer,
+            item_value=ev_item_value,
+            nonce=ev_nonce,
+            block_number=int(receipt.get("blockNumber") or 0),
+            trade=trade,
+        )
+
     def send_attest(self, trade_id: int, risk_score: int, flagged: bool, report_hash: bytes) -> str:
+        if not self.account:
+            raise ChainError("AGENT_PRIVATE_KEY is required for send_attest()")
         fn = self.escrow.functions.attest(trade_id, risk_score, flagged, report_hash)
         with self._tx_lock:
             # Mô phỏng trước để lấy lý do revert rõ ràng thay vì mất gas.

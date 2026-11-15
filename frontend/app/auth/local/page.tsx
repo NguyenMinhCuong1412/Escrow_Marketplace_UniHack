@@ -360,8 +360,8 @@ export default function LocalWalletAuthPage() {
           {/* 2-Line Bold Heading */}
           <div className="space-y-1">
             <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight leading-snug">
-              <span className="block text-[#17191F]">Ví trên trình duyệt.</span>
-              <span className="block text-[#3458D4]">Không cần cài extension.</span>
+              <span className="block text-[#17191F]">Ví trên trình duyệt</span>
+              <span className="block text-[#3458D4]">Không cần extension</span>
             </h1>
           </div>
 
@@ -423,14 +423,14 @@ export default function LocalWalletAuthPage() {
                       htmlFor="local-wallet-name"
                       className="block text-xs font-medium text-[#17191F]"
                     >
-                      Tên ví (chỉ lưu trên máy này)
+                      Tên ví (chỉ lưu trên máy của bạn)
                     </label>
                     <input
                       id="local-wallet-name"
                       type="text"
                       value={walletNameInput}
                       onChange={(e) => setWalletNameInput(e.target.value)}
-                      placeholder="Tên ví (chỉ lưu trên máy này)"
+                      placeholder="Tên ví (chỉ lưu trên máy của bạn)"
                       className="w-full px-3.5 py-2.5 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-sm text-[#17191F] placeholder-[#6B7280] shadow-sm focus:outline-none focus:border-[#3458D4] focus:ring-2 focus:ring-[#3458D4]/20 transition-all"
                     />
                   </div>

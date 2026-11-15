@@ -13,6 +13,8 @@ export function useMyTrades(targetAddress?: string | null) {
   const {
     data: rawNextTradeId,
     isLoading: isLoadingNextId,
+    isError: isErrorNextId,
+    error: errorNextId,
     refetch: refetchNextId,
   } = useReadContract({
     address: escrowAddress,
@@ -45,6 +47,8 @@ export function useMyTrades(targetAddress?: string | null) {
   const {
     data: rawTrades,
     isLoading: isLoadingTrades,
+    isError: isErrorTrades,
+    error: errorTrades,
     refetch: refetchTrades,
   } = useReadContracts({
     contracts,
@@ -118,6 +122,8 @@ export function useMyTrades(targetAddress?: string | null) {
     trades,
     totalCreated: nextTradeId - 1,
     isLoading: isLoadingNextId || isLoadingTrades,
+    isError: isErrorNextId || isErrorTrades,
+    error: errorNextId || errorTrades || null,
     refetch,
   };
 }

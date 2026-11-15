@@ -8,9 +8,12 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { useAccount, useConnect, useDisconnect } from 'wagmi';
+import { useAccount, useConfig, useConnect, useDisconnect } from 'wagmi';
 import {
+  cancelPendingConnectRequest,
   initEip6963Discovery,
+  isPendingRequestError,
+  isUserRejectedError,
   requestWalletAccountSelection,
   resolveWalletProvider,
   WALLET_OPTIONS,
@@ -44,7 +47,7 @@ export function useWalletModal(): WalletModalContextValue {
   return useContext(WalletModalContext);
 }
 
-type ModalView = 'list' | 'connecting' | 'not-installed' | 'error' | 'walletconnect';
+type ModalView = 'list' | 'connecting' | 'pending' | 'not-installed' | 'error' | 'walletconnect';
 
 function SafeQrCode({ uri }: { uri: string }) {
   try {
@@ -86,34 +89,49 @@ export function WalletModalProvider({ children }: { children: React.ReactNode })
   const [wcUri, setWcUri] = useState<string | null>(null);
   const [copiedUri, setCopiedUri] = useState(false);
 
+  const wagmiConfig = useConfig();
   const { address, isConnected, connector: activeConnector } = useAccount();
   const { connectors, connectAsync, reset } = useConnect();
   const { disconnectAsync } = useDisconnect();
 
   const modalRef = useRef<HTMLDivElement>(null);
   const firstItemRef = useRef<HTMLButtonElement>(null);
+  const attemptIdRef = useRef<number>(0);
+
+  const resetWagmiConnectingState = useCallback(() => {
+    cancelPendingConnectRequest();
+    reset();
+    wagmiConfig.setState((x) =>
+      x.status === 'connecting' || x.status === 'reconnecting'
+        ? { ...x, status: x.current ? 'connected' : 'disconnected' }
+        : x
+    );
+  }, [reset, wagmiConfig]);
 
   useEffect(() => {
     initEip6963Discovery();
   }, []);
 
   const openConnectModal = useCallback(() => {
+    attemptIdRef.current += 1;
+    resetWagmiConnectingState();
     initEip6963Discovery();
-    reset();
     setView('list');
     setSelectedWallet(null);
     setErrorMessage(null);
     setWcUri(null);
     setIsOpen(true);
-  }, [reset]);
+  }, [resetWagmiConnectingState]);
 
   const closeConnectModal = useCallback(() => {
+    attemptIdRef.current += 1;
+    resetWagmiConnectingState();
     setIsOpen(false);
     setView('list');
     setSelectedWallet(null);
     setErrorMessage(null);
     setWcUri(null);
-  }, []);
+  }, [resetWagmiConnectingState]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -138,16 +156,103 @@ export function WalletModalProvider({ children }: { children: React.ReactNode })
     };
   }, [isOpen, view, closeConnectModal]);
 
+  useEffect(() => {
+    if (!isOpen || view !== 'pending' || !selectedWallet || selectedWallet.id === 'walletConnect') {
+      return;
+    }
+
+    let active = true;
+    let attachedProvider: any;
+    let finishing = false;
+    const walletId = selectedWallet.id as BrowserWalletId;
+    const targetConnector = connectors.find((c) => c.id === walletId);
+    if (!targetConnector) return;
+
+    const tryFinishConnection = async () => {
+      if (!active || finishing) return;
+      const provider = attachedProvider || (await resolveWalletProvider(walletId, undefined, 50));
+      if (!active || !provider) return;
+
+      const accounts = (await provider
+        .request({ method: 'eth_accounts' })
+        .catch(() => [])) as string[];
+
+      if (!active || !Array.isArray(accounts) || accounts.length === 0) return;
+
+      finishing = true;
+      try {
+        if (isConnected && activeConnector?.id === walletId) {
+          await requestWalletAccountSelection(activeConnector, address);
+        } else {
+          if (isConnected && activeConnector && activeConnector.id !== walletId) {
+            await disconnectAsync().catch(() => {});
+          }
+          await connectAsync({ connector: targetConnector });
+        }
+        if (active) {
+          closeConnectModal();
+        }
+      } catch {
+        finishing = false;
+      }
+    };
+
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (Array.isArray(accounts) && accounts.length > 0) {
+        void tryFinishConnection();
+      }
+    };
+
+    (async () => {
+      const provider = await resolveWalletProvider(walletId, undefined, 50);
+      if (!active || !provider) return;
+      attachedProvider = provider;
+      if (typeof provider.on === 'function') {
+        provider.on('accountsChanged', handleAccountsChanged);
+      }
+      await tryFinishConnection();
+    })();
+
+    const timer = setInterval(() => {
+      void tryFinishConnection();
+    }, 900);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+      if (attachedProvider) {
+        if (typeof attachedProvider.removeListener === 'function') {
+          attachedProvider.removeListener('accountsChanged', handleAccountsChanged);
+        } else if (typeof attachedProvider.off === 'function') {
+          attachedProvider.off('accountsChanged', handleAccountsChanged);
+        }
+      }
+    };
+  }, [
+    isOpen,
+    view,
+    selectedWallet,
+    connectors,
+    isConnected,
+    activeConnector,
+    address,
+    disconnectAsync,
+    connectAsync,
+    closeConnectModal,
+  ]);
+
   const handleBackToList = useCallback(() => {
-    reset();
+    attemptIdRef.current += 1;
+    resetWagmiConnectingState();
     setView('list');
     setSelectedWallet(null);
     setErrorMessage(null);
     setWcUri(null);
-  }, [reset]);
+  }, [resetWagmiConnectingState]);
 
   const handleSelectWallet = useCallback(
     async (wallet: WalletOptionMeta) => {
+      const attemptId = ++attemptIdRef.current;
       setSelectedWallet(wallet);
       setErrorMessage(null);
       reset();
@@ -160,36 +265,42 @@ export function WalletModalProvider({ children }: { children: React.ReactNode })
       }
 
       if (wallet.id !== 'walletConnect') {
+        // Switch immediately to 'connecting' to prevent double-clicks during provider resolution
+        setView('connecting');
         const provider = await resolveWalletProvider(wallet.id as BrowserWalletId);
+        if (attemptId !== attemptIdRef.current) return;
+
         if (!provider) {
           setView('not-installed');
           return;
         }
 
-        setView('connecting');
         try {
           if (isConnected && activeConnector?.id === wallet.id) {
             await requestWalletAccountSelection(activeConnector, address);
-            closeConnectModal();
+            if (attemptId === attemptIdRef.current) {
+              closeConnectModal();
+            }
             return;
           }
 
           if (isConnected && activeConnector && activeConnector.id !== wallet.id) {
             await disconnectAsync().catch(() => {});
+            if (attemptId !== attemptIdRef.current) return;
           }
 
           await connectAsync({ connector: targetConnector });
-          closeConnectModal();
+          if (attemptId === attemptIdRef.current) {
+            closeConnectModal();
+          }
         } catch (err: any) {
+          if (attemptId !== attemptIdRef.current) return;
           const msg = String(err?.shortMessage || err?.message || '');
-          if (
-            err?.code === 4001 ||
-            msg.toLowerCase().includes('rejected') ||
-            msg.toLowerCase().includes('denied') ||
-            msg.toLowerCase().includes('user canceled')
-          ) {
+          if (isUserRejectedError(err)) {
             setErrorMessage(`Đã hủy yêu cầu kết nối trên ví ${wallet.name}.`);
             setView('error');
+          } else if (isPendingRequestError(err)) {
+            setView('pending');
           } else if (err?.name === 'ProviderNotFoundError' || msg.includes('Provider not found')) {
             setView('not-installed');
           } else {
@@ -204,6 +315,7 @@ export function WalletModalProvider({ children }: { children: React.ReactNode })
       setWcUri(null);
 
       const onMessage = (event: { type: string; data?: unknown }) => {
+        if (attemptId !== attemptIdRef.current) return;
         if (event.type === 'display_uri' && typeof event.data === 'string') {
           setWcUri(event.data);
         }
@@ -214,16 +326,16 @@ export function WalletModalProvider({ children }: { children: React.ReactNode })
       try {
         if (isConnected && activeConnector && activeConnector.id !== 'walletConnect') {
           await disconnectAsync().catch(() => {});
+          if (attemptId !== attemptIdRef.current) return;
         }
         await connectAsync({ connector: targetConnector });
-        closeConnectModal();
+        if (attemptId === attemptIdRef.current) {
+          closeConnectModal();
+        }
       } catch (err: any) {
+        if (attemptId !== attemptIdRef.current) return;
         const msg = String(err?.shortMessage || err?.message || '');
-        if (
-          err?.code === 4001 ||
-          msg.toLowerCase().includes('rejected') ||
-          msg.toLowerCase().includes('user canceled')
-        ) {
+        if (isUserRejectedError(err)) {
           setErrorMessage('Đã hủy phiên kết nối WalletConnect.');
         } else {
           setErrorMessage(msg || 'Không thể khởi tạo phiên kết nối WalletConnect.');
@@ -347,6 +459,47 @@ export function WalletModalProvider({ children }: { children: React.ReactNode })
                   <p className="text-xs text-[var(--text-muted)]">
                     Vui lòng chọn tài khoản và xác nhận kết nối trong cửa sổ tiện ích {selectedWallet.name}.
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW 2b: Pending Extension Approval (-32002) with Live Auto-Recovery */}
+            {view === 'pending' && selectedWallet && (
+              <div className="p-6 text-center space-y-4">
+                <div className="relative mx-auto w-14 h-14 flex items-center justify-center">
+                  <img
+                    src={selectedWallet.iconUrl}
+                    alt={selectedWallet.name}
+                    className="w-12 h-12 rounded-xl object-contain"
+                  />
+                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-[var(--bg)] border border-[var(--border)] flex items-center justify-center">
+                    <RefreshCw className="w-3 h-3 text-[var(--accent)] animate-spin" />
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-sm font-bold text-[var(--text)]">
+                    Đang chờ xác nhận trên {selectedWallet.name}
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+                    Tiện ích {selectedWallet.name} đang có yêu cầu kết nối chưa hoàn tất (cửa sổ ví có thể đang ẩn hoặc cần mở khóa). Vui lòng bấm vào biểu tượng {selectedWallet.name} trên thanh công cụ trình duyệt để chấp thuận — trang sẽ tự động kết nối.
+                  </p>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleBackToList}
+                    className="flex-1 py-2.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] font-medium text-xs transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                  >
+                    Chọn ví khác
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectWallet(selectedWallet)}
+                    className="flex-1 py-2.5 px-3 rounded-lg bg-[var(--primary-bg)] text-[var(--primary-fg)] font-semibold text-xs transition-opacity hover:opacity-90 flex items-center justify-center gap-1.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Kiểm tra lại</span>
+                  </button>
                 </div>
               </div>
             )}

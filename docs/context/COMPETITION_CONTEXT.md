@@ -1,7 +1,8 @@
 # Competition Context – Team1 Vietnam UniHack: Build on Avalanche
 
 > Trạng thái: `CONFIRMED – đã xác minh với nguồn chính thức team1vn.xyz`  
-> Cập nhật: 2026-11-05
+> Cập nhật: 2026-11-15
+> Verified against commit: `bdb1e138cc6ccf0030e784f4eb0c6c18c75660a5` (working tree gồm thay đổi MKT-001..MKT-005 chưa commit — cập nhật hash sau khi merge)
 
 ## Thông tin cuộc thi
 

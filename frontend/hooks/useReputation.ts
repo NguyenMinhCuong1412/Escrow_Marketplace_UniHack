@@ -18,10 +18,12 @@ export function useReputation(address?: string | null) {
     },
   });
 
+  const hasOnChainData = data !== undefined && !isError;
   const score = data !== undefined ? Number(data) : 50; // Initial default is 50
 
   return {
     score,
+    hasOnChainData,
     isLoading,
     isError,
     refetch,

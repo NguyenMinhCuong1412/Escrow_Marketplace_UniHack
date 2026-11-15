@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { useTrade } from '@/hooks/useTrade';
 import { getReport, verifyReportOnChain, VerifyResponse } from '@/lib/backend';
 import { formatAvax } from '@/lib/format';
+import { parseTradeIdParam } from '@/lib/trade-id';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -31,8 +32,15 @@ import { toast } from 'sonner';
 
 export default function EvidenceReportPage() {
   const params = useParams();
-  const tradeIdStr = (params?.id as string) || '0';
-  const tradeId = BigInt(tradeIdStr);
+  const rawTradeIdParam =
+    typeof params?.id === 'string'
+      ? params.id
+      : Array.isArray(params?.id)
+        ? (params.id[0] ?? '')
+        : '';
+  const parsedTradeId = parseTradeIdParam(params?.id);
+  const tradeId = parsedTradeId ?? 0n;
+  const tradeIdStr = parsedTradeId ? parsedTradeId.toString() : '';
 
   const { trade, isLoading: isLoadingTrade } = useTrade(tradeId);
 
@@ -55,11 +63,17 @@ export default function EvidenceReportPage() {
   const [showRawJson, setShowRawJson] = useState(false);
 
   useEffect(() => {
+    if (parsedTradeId === null) {
+      setIsLoadingReport(false);
+      setFetchError(null);
+      return;
+    }
+
     let mounted = true;
     setIsLoadingReport(true);
     setFetchError(null);
 
-    getReport(tradeId)
+    getReport(parsedTradeId)
       .then((data) => {
         if (mounted) setReportData(data);
       })
@@ -73,7 +87,7 @@ export default function EvidenceReportPage() {
     return () => {
       mounted = false;
     };
-  }, [tradeId]);
+  }, [parsedTradeId]);
 
   const handleVerifyOnChain = () => {
     if (!reportData || !trade) {
@@ -94,6 +108,33 @@ export default function EvidenceReportPage() {
       toast.error('Mã băm không khớp với reportHash trên Smart Contract.');
     }
   };
+
+  if (parsedTradeId === null) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 text-center space-y-5">
+        <div className="w-14 h-14 rounded-2xl bg-[#F0B44D]/20 border border-[#F0B44D]/40 text-[#925E09] flex items-center justify-center mx-auto shadow-sm">
+          <AlertTriangle className="w-7 h-7 text-[#925E09]" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-xl font-bold text-[#17191F]">Mã giao dịch không hợp lệ</h2>
+          <p className="text-xs text-[#525866] max-w-md mx-auto leading-relaxed">
+            Không thể mở báo cáo AI cho mã{' '}
+            <code className="px-1.5 py-0.5 rounded bg-[#F7F8FA] border border-[#E5E7EB]">
+              {rawTradeIdParam || '—'}
+            </code>
+            . Vui lòng nhập mã giao dịch là số nguyên dương hợp lệ.
+          </p>
+        </div>
+        <Link
+          href="/trades"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FFFFFF] hover:bg-[#F7F8FA] border border-[#E5E7EB] text-[#17191F] text-xs font-semibold shadow-sm transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Về Giao dịch của tôi
+        </Link>
+      </div>
+    );
+  }
 
   if (isLoadingReport || isLoadingTrade) {
     return (

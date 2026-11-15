@@ -8,6 +8,7 @@ import { useWalletModal } from '@/components/ConnectWalletModal';
 import { targetChain } from '@/lib/wagmi';
 import { LOCAL_WALLET_CONNECTOR_ID } from '@/lib/local-wallet/connector';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { CollectiblesCarousel } from '@/components/CollectiblesCarousel';
 
 export default function AuthPage() {
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function AuthPage() {
   const { address, isConnected, status, connector, chain } = useAccount();
   const { error: connectError, isPending, reset } = useConnect();
   const { switchChainAsync, isPending: isSwitchingChain } = useSwitchChain();
-  const { openConnectModal } = useWalletModal();
+  const { isOpen: isConnectModalOpen, openConnectModal } = useWalletModal();
   const {
     serverSessionActive,
     isCorrectNetwork,
@@ -50,7 +51,7 @@ export default function AuthPage() {
   const showConnectedCard = Boolean(mounted && isConnected && address);
   const showConnectError = Boolean(mounted && connectError);
   const showConnectingBanner = Boolean(
-    mounted && (isPending || status === 'connecting' || status === 'reconnecting')
+    mounted && isConnectModalOpen && (isPending || status === 'connecting')
   );
 
   const handlePromptAccountFromExtension = async () => {
@@ -67,92 +68,83 @@ export default function AuthPage() {
       data-auth-theme="light"
       className="fixed inset-0 z-40 overflow-y-auto overflow-x-hidden bg-[var(--bg)] text-[var(--text)]"
     >
-      <div className="min-h-full w-full max-w-[420px] mx-auto px-5 py-12 sm:py-20 flex flex-col justify-between gap-10 text-left">
-        <div className="space-y-10">
-          {/* Header: Flat Mark + Brand Name + Single Network Badge */}
-          <header className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
+      <div className="min-h-full w-full flex items-center justify-center px-5 py-8 sm:px-8 sm:py-12 lg:px-12 lg:py-16">
+        <main className="w-full max-w-[540px] lg:max-w-[1200px] mx-auto grid grid-cols-1 lg:grid-cols-[45fr_55fr] items-center gap-10 lg:gap-14 text-left">
+          {/* Left Column (45%): Auth Content */}
+          <section className="flex flex-col justify-center gap-8 sm:gap-9 lg:pr-2">
+            {/* Brand Header */}
+            <header className="flex items-center gap-3.5 sm:gap-4">
               <div
                 aria-hidden="true"
-                className="w-6 h-6 rounded-lg bg-[#3458D4] text-white flex items-center justify-center text-xs font-bold shadow-sm select-none"
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#3458D4] text-white flex items-center justify-center text-xl sm:text-2xl font-extrabold shadow-sm select-none shrink-0"
               >
                 E
               </div>
-              <span className="text-sm font-semibold tracking-tight text-[#17191F]">
+              <span className="text-2xl sm:text-[26px] lg:text-[28px] font-bold tracking-tight text-[#17191F]">
                 Escrow Marketplace
               </span>
+            </header>
+
+            {/* Bold Hero Headline */}
+            <div>
+              <h1 className="text-3xl sm:text-4xl lg:text-[42px] xl:text-[44px] font-extrabold tracking-tight leading-[1.12] text-[#17191F]">
+                Mua bán đồ sưu tầm
+              </h1>
             </div>
 
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] text-xs font-medium text-[#17191F] shadow-sm">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>Fuji Testnet</span>
-            </span>
-          </header>
-
-          {/* 2-Line Bold Heading */}
-          <div className="space-y-1">
-            <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight leading-snug">
-              <span className="block text-[#17191F]">Mua bán đồ sưu tầm.</span>
-              <span className="block text-[#3458D4]">Kiểm hàng bằng AI.</span>
-            </h1>
-          </div>
-
-          {/* Main Content: Disconnected vs Connected */}
-          {!showConnectedCard ? (
-            <div className="space-y-6">
-              <div className="space-y-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    reset();
-                    openConnectModal();
-                  }}
-                  disabled={mounted ? isPending : false}
-                  className="w-full py-3 px-4 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-sm shadow-sm transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
-                >
-                  {showConnectingBanner ? 'Đang kết nối ví...' : 'Kết nối ví'}
-                </button>
-                <p className="text-xs text-[#525866]">
-                  Core, MetaMask, WalletConnect
-                </p>
-              </div>
-
-              {showConnectError && connectError && (
-                <div
-                  role="alert"
-                  className="p-3 rounded-xl border border-red-200 bg-red-50 text-xs text-red-900 space-y-1.5 shadow-sm"
-                >
-                  <p className="font-medium text-red-700">
-                    {connectError.message.includes('User rejected')
-                      ? 'Đã hủy yêu cầu kết nối ví.'
-                      : connectError.message}
-                  </p>
+            {/* Main Content: Disconnected vs Connected */}
+            {!showConnectedCard ? (
+              <div className="space-y-6">
+                <div>
                   <button
                     type="button"
                     onClick={() => {
                       reset();
                       openConnectModal();
                     }}
-                    className="text-xs font-medium text-[#3458D4] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
+                    disabled={showConnectingBanner}
+                    className="w-full min-h-[56px] py-4 px-6 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-base sm:text-lg shadow-sm transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
                   >
-                    Thử lại
+                    {showConnectingBanner ? 'Đang kết nối ví...' : 'Kết nối ví'}
                   </button>
                 </div>
-              )}
 
-              <div className="pt-2 border-t border-[#E5E7EB]">
-                <p className="text-sm text-[#525866]">
-                  Chưa có ví?{' '}
-                  <Link
-                    href={localPageHref}
-                    className="font-semibold text-[#3458D4] hover:text-[#2947B5] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
+                {showConnectError && connectError && (
+                  <div
+                    role="alert"
+                    className="p-3.5 rounded-xl border border-red-200 bg-red-50 text-xs sm:text-sm text-red-900 space-y-1.5 shadow-sm"
                   >
-                    Tạo ví ngay trên trình duyệt →
-                  </Link>
-                </p>
+                    <p className="font-medium text-red-700">
+                      {connectError.message.includes('User rejected')
+                        ? 'Đã hủy yêu cầu kết nối ví.'
+                        : connectError.message}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reset();
+                        openConnectModal();
+                      }}
+                      className="text-xs sm:text-sm font-medium text-[#3458D4] underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
+                    >
+                      Thử lại
+                    </button>
+                  </div>
+                )}
+
+                <div className="pt-2">
+                  <p className="text-base text-[#525866]">
+                    Chưa có ví?{' '}
+                    <Link
+                      href={localPageHref}
+                      className="font-semibold text-[#3458D4] hover:text-[#2947B5] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] rounded"
+                    >
+                      Tạo ví ngay trên trình duyệt
+                    </Link>
+                  </p>
+                </div>
               </div>
-            </div>
-          ) : (
+            ) : (
             <div className="space-y-5">
               {/* Connected Wallet Summary Surface */}
               <div className="p-4 rounded-xl border border-[#E5E7EB] bg-[#FFFFFF] shadow-sm space-y-3 text-xs">
@@ -267,21 +259,21 @@ export default function AuthPage() {
                     if (ok) router.push(returnUrl);
                   }}
                   disabled={isSigningIn}
-                  className="w-full py-3 px-4 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-sm shadow-sm transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
+                  className="w-full min-h-[56px] py-4 px-6 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-base sm:text-lg shadow-sm transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
                 >
                   {isSigningIn ? 'Đang chờ ký xác nhận trên ví...' : 'Ký xác nhận & Vào sàn'}
                 </button>
               ) : (
                 <Link
                   href={returnUrl}
-                  className="block w-full py-3 px-4 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-sm text-center shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
+                  className="flex items-center justify-center w-full min-h-[56px] py-4 px-6 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white font-semibold text-base sm:text-lg text-center shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3458D4] focus-visible:ring-offset-2"
                 >
                   Vào sàn giao dịch →
                 </Link>
               )}
 
               {/* Secondary links */}
-              <div className="flex items-center justify-between text-xs text-[#525866] pt-1">
+              <div className="flex items-center justify-between text-sm text-[#525866] pt-1">
                 {isLocalConnected ? (
                   <Link
                     href={localPageHref}
@@ -309,14 +301,20 @@ export default function AuthPage() {
               </div>
             </div>
           )}
-        </div>
 
-        {/* Footer Honest Note */}
-        <footer className="pt-6 border-t border-[#E5E7EB]">
-          <p className="text-xs text-[#525866] leading-relaxed">
-            Chúng tôi không bao giờ hỏi cụm từ khôi phục của bạn.
-          </p>
-        </footer>
+            {/* Footer Honest Note */}
+            <footer className="pt-6 border-t border-[#E5E7EB]">
+              <p className="text-sm sm:text-[15px] text-[#525866] leading-relaxed">
+                Chúng tôi không bao giờ hỏi cụm từ khôi phục của bạn.
+              </p>
+            </footer>
+          </section>
+
+          {/* Right Column (55%): Collectibles Carousel */}
+          <section className="w-full">
+            <CollectiblesCarousel />
+          </section>
+        </main>
       </div>
     </div>
   );

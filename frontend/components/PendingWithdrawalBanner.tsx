@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useAccount, useReadContract, useWriteContract, usePublicClient } from 'wagmi';
 import { escrowAddress, escrowAbi } from '@/lib/contracts';
 import { formatAvax } from '@/lib/format';
-import { getReadableError } from '@/lib/errors';
+import { notifyWalletActionError } from '@/lib/wallet-toast';
 import { Coins, ArrowDownToLine, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -58,8 +58,7 @@ export const PendingWithdrawalBanner: React.FC = () => {
       toast.success(`Đã rút thành công ${formatAvax(pendingAmount)} AVAX về ví!`, { id: toastId });
       await refetch();
     } catch (err) {
-      console.error('Withdraw error:', err);
-      toast.error(`Rút tiền thất bại: ${getReadableError(err)}`, { id: toastId });
+      notifyWalletActionError(err, 'Rút tiền thất bại', { toastId, context: 'Withdraw' });
     } finally {
       setIsPending(false);
     }

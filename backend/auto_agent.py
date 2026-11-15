@@ -95,14 +95,17 @@ class AutoAgent:
     # nằm gọn trong ATTEST_WINDOW; hết lượt thì dừng và để người dùng chạy thủ công.
 
     def __init__(self, get_client: Callable[[], EscrowClient], registry: UriRegistry,
-                 verify: Callable[[int, dict[str, str]], object], poll_seconds: float = 5.0):
+                 verify: Callable[[int, dict[str, str]], object], poll_seconds: float = 5.0,
+                 reconcile: Optional[Callable[[], None]] = None):
         self._get_client = get_client
         self._registry = registry
         self._verify = verify
+        self._reconcile = reconcile
         self.poll_seconds = poll_seconds
         self.status: dict[int, dict] = {}
         self.last_tick: Optional[float] = None
         self.last_error: Optional[str] = None
+        self.last_reconcile_error: Optional[str] = None
         self._cursor = 1            # mọi trade id < cursor đều đã ở trạng thái kết thúc
         self._done: set[int] = set()
         self._stop = threading.Event()
@@ -142,6 +145,16 @@ class AutoAgent:
 
     def tick(self) -> None:
         with self._tick_lock:
+            # 1. Đối soát marketplace chỉ đọc (TTL + đồng bộ trạng thái DB), tách biệt hoàn toàn khỏi AI attest.
+            if self._reconcile is not None:
+                try:
+                    self._reconcile()
+                    self.last_reconcile_error = None
+                except Exception as e:
+                    self.last_reconcile_error = str(getattr(e, "detail", e))
+                    log.warning("marketplace reconcile lỗi: %s", self.last_reconcile_error)
+
+            # 2. Quét AI attest tự động như hiện hữu.
             c = self._get_client()
             next_id = c.next_trade_id()
             for tid in range(self._cursor, next_id):

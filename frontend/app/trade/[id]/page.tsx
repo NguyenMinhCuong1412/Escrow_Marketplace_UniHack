@@ -18,8 +18,16 @@ import { EvidenceUploader } from '@/components/EvidenceUploader';
 import { VerifyProgress } from '@/components/VerifyProgress';
 import { AgentStatusCard } from '@/components/AgentStatusCard';
 import { formatDateTime, formatAvax } from '@/lib/format';
-import { getReadableError } from '@/lib/errors';
-import { getStoredListingUri, ipfsToGatewayUrl } from '@/lib/ipfs';
+import { notifyWalletActionError } from '@/lib/wallet-toast';
+import { parseTradeIdParam } from '@/lib/trade-id';
+import { getStoredListingUri, ipfsToGatewayUrl, setStoredListingUri } from '@/lib/ipfs';
+import {
+  getTradeMarketplaceContext,
+  syncMarketplaceTrade,
+  weiToAvaxString,
+  type TradeContextDto,
+} from '@/lib/marketplace';
+import { CATEGORY_LABELS, CONDITION_LABELS } from '@/lib/marketplace-ui';
 import {
   ShieldCheck,
   Coins,
@@ -36,27 +44,52 @@ import {
   Sparkles,
   FileSearch,
   ExternalLink,
+  RefreshCw,
+  Store,
+  Package,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function TradeDetailPage() {
   const params = useParams();
-  const tradeIdStr = params?.id as string;
-  const tradeId = BigInt(tradeIdStr || '0');
+  const rawTradeIdParam =
+    typeof params?.id === 'string'
+      ? params.id
+      : Array.isArray(params?.id)
+        ? (params.id[0] ?? '')
+        : '';
+  const parsedTradeId = parseTradeIdParam(params?.id);
+  const tradeId = parsedTradeId ?? 0n;
+  const tradeIdStr = parsedTradeId ? parsedTradeId.toString() : '';
 
   const { address, isConnected, chain } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
 
-  const { trade, role, exists, isLoading, refetch } = useTrade(tradeId);
+  const { trade, role, exists, isLoading, isError, error, refetch } = useTrade(tradeId);
 
   // Reputation queries for parties
   const { score: sellerReputation } = useReputation(trade?.seller);
   const { score: buyerReputation } = useReputation(trade?.buyer);
 
-  // Local metadata (title, description from local storage)
+  // Local metadata (title, description from local storage) & Marketplace context
   const [meta, setMeta] = useState<{ title?: string; description?: string } | null>(null);
+  const [marketplaceContext, setMarketplaceContext] = useState<TradeContextDto | null>(null);
+  const [isSyncingCtx, setIsSyncingCtx] = useState(false);
   const [isPendingTx, setIsPendingTx] = useState(false);
+
+  const loadMarketplaceContext = React.useCallback(async () => {
+    if (!tradeIdStr || tradeId <= 0n) return;
+    try {
+      const ctx = await getTradeMarketplaceContext(tradeIdStr);
+      setMarketplaceContext(ctx);
+      if (ctx?.bound && ctx.listing?.primary_image_uri && !getStoredListingUri(tradeId)) {
+        setStoredListingUri(tradeId, ctx.listing.primary_image_uri);
+      }
+    } catch {
+      // P2P trade hoặc backend tạm thời không trả context — không chặn UI on-chain
+    }
+  }, [tradeIdStr, tradeId]);
 
   useEffect(() => {
     if (tradeIdStr) {
@@ -68,8 +101,34 @@ export default function TradeDetailPage() {
       } catch {
         // ignore
       }
+      loadMarketplaceContext();
     }
-  }, [tradeIdStr]);
+  }, [tradeIdStr, loadMarketplaceContext]);
+
+  const syncBestEffort = async () => {
+    if (!tradeIdStr) return;
+    try {
+      await syncMarketplaceTrade(tradeIdStr);
+      await loadMarketplaceContext();
+    } catch {
+      // ignore if P2P trade or temporary backend error
+    }
+  };
+
+  const handleManualSync = async () => {
+    if (!tradeIdStr || isSyncingCtx) return;
+    setIsSyncingCtx(true);
+    try {
+      await syncMarketplaceTrade(tradeIdStr);
+      await loadMarketplaceContext();
+      await refetch();
+      toast.success('Đã đồng bộ trạng thái Escrow từ blockchain!');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Chưa đồng bộ được trạng thái Marketplace.');
+    } finally {
+      setIsSyncingCtx(false);
+    }
+  };
 
   const isWrongChain = Boolean(isConnected && chain && chain.id !== targetChain.id);
   const isActionDisabled = !isConnected || isWrongChain || isPendingTx;
@@ -116,10 +175,9 @@ export default function TradeDetailPage() {
 
       toast.success(successMsg, { id: toastId });
       await refetch();
+      await syncBestEffort();
     } catch (err: any) {
-      console.error(`Error executing ${fnName}:`, err);
-      const readable = getReadableError(err);
-      toast.error(`Thao tác thất bại: ${readable}`, { id: toastId });
+      notifyWalletActionError(err, 'Thao tác thất bại', { toastId, context: fnName });
     } finally {
       setIsPendingTx(false);
     }
@@ -181,11 +239,80 @@ export default function TradeDetailPage() {
     );
   };
 
+  if (parsedTradeId === null) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 text-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-[#F0B44D]/20 border border-[#F0B44D]/40 text-[#925E09] flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-6 h-6 text-[#925E09]" />
+        </div>
+        <h2 className="text-xl font-bold text-[#17191F]">Mã giao dịch không hợp lệ</h2>
+        <p className="text-xs text-[#525866]">
+          Đường dẫn{' '}
+          <code className="px-1.5 py-0.5 rounded bg-[#F7F8FA] border border-[#E5E7EB]">
+            /trade/{rawTradeIdParam || '—'}
+          </code>{' '}
+          không chứa mã giao dịch hợp lệ (cần một số nguyên dương, ví dụ:{' '}
+          <code className="px-1.5 py-0.5 rounded bg-[#F7F8FA] border border-[#E5E7EB]">/trade/2</code>).
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2.5">
+          <Link
+            href="/trades"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FFFFFF] hover:bg-[#F7F8FA] border border-[#E5E7EB] text-[#17191F] text-xs font-semibold shadow-sm transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Về Giao dịch của tôi
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white text-xs font-semibold shadow-sm transition-colors"
+          >
+            Chợ sản phẩm
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="max-w-4xl mx-auto py-16 text-center space-y-4">
         <div className="inline-block w-8 h-8 border-2 border-[#3458D4] border-t-transparent rounded-full animate-spin" />
         <p className="text-sm text-[#525866]">Đang đọc thông tin giao dịch từ Smart Contract...</p>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 text-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-6 h-6 text-red-700" />
+        </div>
+        <h2 className="text-xl font-bold text-[#17191F]">
+          Không thể đọc thông tin giao dịch #{tradeIdStr} từ RPC
+        </h2>
+        <p className="text-xs text-[#525866]">
+          {error instanceof Error
+            ? error.message
+            : `Kết nối tới mạng ${targetChain.name} đang gặp sự cố hoặc quá thời gian chờ.`}
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white text-xs font-semibold shadow-sm cursor-pointer"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Thử đọc lại từ blockchain
+          </button>
+          <Link
+            href="/trades"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FFFFFF] hover:bg-[#F7F8FA] border border-[#E5E7EB] text-[#17191F] text-xs font-semibold shadow-sm transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Về Giao dịch của tôi
+          </Link>
+        </div>
       </div>
     );
   }
@@ -200,18 +327,28 @@ export default function TradeDetailPage() {
         <p className="text-xs text-[#525866]">
           Hợp đồng Escrow không tìm thấy giao dịch này trên mạng {targetChain.name}.
         </p>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FFFFFF] hover:bg-[#F7F8FA] border border-[#E5E7EB] text-[#17191F] text-xs font-semibold shadow-sm transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Về trang chủ
-        </Link>
+        <div className="flex flex-wrap items-center justify-center gap-2.5">
+          <Link
+            href="/trades"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FFFFFF] hover:bg-[#F7F8FA] border border-[#E5E7EB] text-[#17191F] text-xs font-semibold shadow-sm transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Về Giao dịch của tôi
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#3458D4] hover:bg-[#2947B5] text-white text-xs font-semibold shadow-sm transition-colors"
+          >
+            Chợ sản phẩm
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const titleText = meta?.title || `Vật phẩm sưu tầm #${trade.id.toString()}`;
+  const linkedListing = marketplaceContext?.bound ? marketplaceContext.listing : null;
+  const titleText =
+    linkedListing?.title || meta?.title || `Vật phẩm sưu tầm #${trade.id.toString()}`;
   const nowUnix = Math.floor(Date.now() / 1000);
   const isEvidenceExpired = trade.evidenceDeadline > 0n && nowUnix > Number(trade.evidenceDeadline);
   const isDisputeExpired = trade.disputeDeadline > 0n && nowUnix > Number(trade.disputeDeadline);
@@ -222,11 +359,11 @@ export default function TradeDetailPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E5E7EB] pb-6">
         <div className="space-y-1">
           <Link
-            href="/"
+            href="/trades"
             className="inline-flex items-center gap-1 text-xs text-[#525866] hover:text-[#17191F] transition-colors mb-2"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            Quay lại danh sách
+            Quay lại Giao dịch của tôi
           </Link>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-[#17191F] tracking-tight">
@@ -246,7 +383,18 @@ export default function TradeDetailPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {marketplaceContext?.bound && (
+            <button
+              type="button"
+              disabled={isSyncingCtx}
+              onClick={handleManualSync}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[#E5E7EB] bg-[#FFFFFF] hover:bg-[#F7F8FA] text-xs font-semibold text-[#17191F] cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCtx ? 'animate-spin' : ''}`} />
+              <span>Đồng bộ trạng thái</span>
+            </button>
+          )}
           <StateBadge state={trade.state} flagged={trade.flagged} />
         </div>
       </div>
@@ -278,9 +426,58 @@ export default function TradeDetailPage() {
               )}
             </div>
 
+            {/* Marketplace Linked Product Card */}
+            {linkedListing && (
+              <div className="rounded-xl border border-[#3458D4]/25 bg-[#3458D4]/5 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-14 h-14 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] overflow-hidden shrink-0">
+                    {linkedListing.primary_image_uri ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={ipfsToGatewayUrl(linkedListing.primary_image_uri)}
+                        alt={linkedListing.title}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[#525866]">
+                        <Package className="w-5 h-5" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 space-y-0.5 text-xs">
+                    <div className="inline-flex items-center gap-1 text-[10px] font-bold text-[#2947B5] uppercase tracking-wider">
+                      <Store className="w-3 h-3" />
+                      <span>Sản phẩm Marketplace</span>
+                    </div>
+                    <p className="font-bold text-[#17191F] truncate">{linkedListing.title}</p>
+                    <p className="text-[#525866] font-mono">
+                      SKU: {linkedListing.sku} · {CATEGORY_LABELS[linkedListing.category]} ·{' '}
+                      {CONDITION_LABELS[linkedListing.condition]}
+                      {marketplaceContext?.quantity ? ` · SL: ${marketplaceContext.quantity}` : ''}
+                    </p>
+                    {marketplaceContext?.unit_price_wei && (
+                      <p className="text-[#525866]">
+                        Đơn giá: <strong>{weiToAvaxString(marketplaceContext.unit_price_wei, 4)} AVAX</strong>
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <Link
+                  href={`/listings/${linkedListing.id}`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[#3458D4]/30 bg-[#FFFFFF] hover:bg-[#F7F8FA] text-xs font-semibold text-[#2947B5] shrink-0 self-start sm:self-center"
+                >
+                  <span>Xem tin gốc</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            )}
+
             {/* Listing Image Preview if available */}
             {(() => {
-              const listingUri = (meta as any)?.listingUri || getStoredListingUri(trade.id);
+              const listingUri =
+                linkedListing?.primary_image_uri ||
+                (meta as any)?.listingUri ||
+                getStoredListingUri(trade.id);
               if (!listingUri) return null;
               return (
                 <div className="rounded-xl border border-[#E5E7EB] bg-[#F7F8FA] p-3 flex items-center gap-4">
@@ -428,12 +625,18 @@ export default function TradeDetailPage() {
 
               <AgentStatusCard
                 tradeId={trade.id}
-                onAttested={() => refetch()}
+                onAttested={() => {
+                  refetch();
+                  syncBestEffort();
+                }}
                 fallback={
                   <VerifyProgress
                     tradeId={trade.id}
                     canVerify={sellerHasEvidence && buyerHasEvidence}
-                    onSuccess={() => refetch()}
+                    onSuccess={() => {
+                      refetch();
+                      syncBestEffort();
+                    }}
                   />
                 }
               />

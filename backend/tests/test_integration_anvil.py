@@ -9,6 +9,8 @@ Yêu cầu: Foundry (anvil) + `forge build` đã chạy trong contracts/ + Tesse
 """
 
 import json
+import os
+import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -134,14 +136,19 @@ def _publish(file_server, name, img=None, frames=None):
 
 
 def _photo(item, seed, short, nonce_hex, **kw):
-    """Ảnh có nonce mà OCR chắc chắn đọc được. Nonce on-chain là ngẫu nhiên và OCR
-    trên font tổng hợp đạt ~99% (đo ở ai-pipeline), nên đổi góc chụp nếu lỡ trượt —
-    test này kiểm tra đường ống backend ↔ chain, độ chính xác OCR có unit test riêng."""
+    """Ảnh có nonce mà pipeline chắc chắn đọc được. Kiểm nonce trên ĐÚNG ảnh JPEG mà
+    `_publish` sẽ ghi và agent sẽ đọc (synth.write_image q=92 -> ec.load_bgr), không kiểm
+    trên mảng chưa nén: nén JPEG có thể làm OCR trượt (~1-2%/cặp ảnh) -> agent flag -> test flaky.
+    cv2.imencode là tất định nên file `_publish` ghi ra trùng từng byte với file probe."""
     for k in range(6):
         img = synth.photograph(item, seed + 1000 * k, short, **kw)
-        if short is None or ec.check_nonce(img, nonce_hex).found:
+        if short is None:
             return img
-    raise AssertionError("OCR không đọc được nonce sau 6 lần thử")
+        with tempfile.TemporaryDirectory() as d:
+            probe = synth.write_image(img, os.path.join(d, "probe.jpg"))
+            if ec.check_nonce(ec.load_bgr(probe), nonce_hex).found:
+                return img
+    raise AssertionError("OCR không đọc được nonce trên ảnh JPEG sau 6 lần thử")
 
 
 def _sign_listing(chain, key, tid, uri):

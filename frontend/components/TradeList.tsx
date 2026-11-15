@@ -7,14 +7,17 @@ import { StateBadge } from '@/components/StateBadge';
 import { AddressDisplay } from '@/components/AddressDisplay';
 import { AvaxAmount } from '@/components/AvaxAmount';
 import { CountdownTimer } from '@/components/CountdownTimer';
-import { PlusCircle, ArrowRight, PackageOpen } from 'lucide-react';
+import { PlusCircle, ArrowRight, PackageOpen, Package } from 'lucide-react';
 import { useAccount } from 'wagmi';
+import type { TradeContextDto } from '@/lib/marketplace';
+import { ipfsToGatewayUrl } from '@/lib/ipfs';
 
 interface TradeListProps {
   trades: TradeData[];
   isLoading?: boolean;
   filterAddress?: string;
   emptyMessage?: string;
+  contextsByTradeId?: Record<string, TradeContextDto>;
 }
 
 export const TradeList: React.FC<TradeListProps> = ({
@@ -22,6 +25,7 @@ export const TradeList: React.FC<TradeListProps> = ({
   isLoading,
   filterAddress,
   emptyMessage = 'Bạn chưa có giao dịch nào được tạo.',
+  contextsByTradeId,
 }) => {
   const { address } = useAccount();
   const currentAddress = (filterAddress || address || '').toLowerCase();
@@ -62,6 +66,7 @@ export const TradeList: React.FC<TradeListProps> = ({
         <thead className="bg-[#F7F8FA] text-[#525866] uppercase tracking-wider border-b border-[#E5E7EB]">
           <tr>
             <th className="py-3.5 px-4 font-semibold">#ID</th>
+            <th className="py-3.5 px-4 font-semibold">Sản phẩm</th>
             <th className="py-3.5 px-4 font-semibold">Vai trò</th>
             <th className="py-3.5 px-4 font-semibold">Đối tác</th>
             <th className="py-3.5 px-4 font-semibold">Giá trị món hàng</th>
@@ -88,6 +93,9 @@ export const TradeList: React.FC<TradeListProps> = ({
               deadlineLabel = 'Hạn khiếu nại';
             }
 
+            const ctx = contextsByTradeId?.[trade.id.toString()];
+            const listing = ctx?.bound ? ctx.listing : null;
+
             return (
               <tr
                 key={trade.id.toString()}
@@ -95,6 +103,42 @@ export const TradeList: React.FC<TradeListProps> = ({
               >
                 <td className="py-3.5 px-4 font-mono font-bold text-[#17191F]">
                   #{trade.id.toString()}
+                </td>
+                <td className="py-3.5 px-4 max-w-[240px]">
+                  {listing ? (
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-lg border border-[#E5E7EB] bg-[#F7F8FA] overflow-hidden shrink-0">
+                        {listing.primary_image_uri ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={ipfsToGatewayUrl(listing.primary_image_uri)}
+                            alt={listing.title}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[#525866]">
+                            <Package className="w-4 h-4" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <Link
+                          href={`/listings/${listing.id}`}
+                          className="font-semibold text-[#17191F] hover:text-[#2947B5] block truncate"
+                        >
+                          {listing.title}
+                        </Link>
+                        <p className="text-[10px] font-mono text-[#525866] truncate">
+                          SKU: {listing.sku}
+                          {ctx?.quantity ? ` · SL: ${ctx.quantity}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-[#525866] font-medium">
+                      Escrow P2P trực tiếp
+                    </span>
+                  )}
                 </td>
                 <td className="py-3.5 px-4">
                   {isSeller ? (
