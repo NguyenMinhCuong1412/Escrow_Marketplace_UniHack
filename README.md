@@ -83,7 +83,8 @@ cd frontend && npx tsc --noEmit && npm test && npm run build
 
 - **Demo Video:** `PENDING-OWNER`
 - **Pitch Deck / Slide:** `PENDING-OWNER`
-- **Live Fuji dApp:** `PENDING-OWNER`
+- **Live Fuji dApp:** `OPTIONAL` *(chạy demo local kết nối Avalanche Fuji `43113` theo mục 3; chưa deploy URL công khai)*
+- **Fuji Test Evidence (`Trade #1..#4`):** Xem [docs/test-evidence/FUJI-TRADE-4-QA.md](docs/test-evidence/FUJI-TRADE-4-QA.md) (`Trade #4 = Cancelled` hoàn cọc timeout qua [`0x82ab62...4bbd`](https://testnet.snowtrace.io/tx/0x82ab6274f1cbc55ed7dfc07ec397896e117c9fd7ebcc9daedd8e2f56aef54bbd); `ResolvedClean` & phạt `5%` sẽ thực hiện khi quay video demo)
 - **Fuji Escrow Address (`43113`):** `0x19D053c84941411888f5b9e40c854365fdd4eb00` (block `60980241`, xem `contracts/deployments/43113.json`)
 - **Fuji CollectibleToken (`CDU`) Address:** `0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78`
 - **AI Agent Address (`onlyAgent`):** `0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081`
