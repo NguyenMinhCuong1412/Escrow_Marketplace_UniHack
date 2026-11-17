@@ -1,31 +1,31 @@
 # Current Project Status
 
-> Last updated: 2026-11-15
-> Verified against commit: `bdb1e138cc6ccf0030e784f4eb0c6c18c75660a5` (working tree gồm thay đổi MKT-001..MKT-005 chưa commit — cập nhật hash sau khi merge)
-> Status: `MKT-005 Remediation (Security + Doc Sync) hoàn tất code, chờ Owner kiểm tra và thực hiện Avalanche Fuji Manual Verification (chưa FINAL FREEZE)`
+> Last updated: 2026-11-17
+> Verified against commit: `f6b909a575c6f7b45fdceb50d92ce33aa2101713` (`main`, PR #13)
+> Status: `Code & bảo mật bản demo đã ổn định trên main (f6b909a); Trade #4 đã hoàn cọc timeout (Cancelled, Escrow = 0 AVAX), chuyển sang hoàn thiện slide, video demo Clean Flow + Dispute 5% và hồ sơ UniHack 2026`
 
 ## High-level
 
-- [x] Repo folder structure + context docs consolidated (Phase 0).
-- [x] Smart Contracts + AI Pipeline + Backend hardened (Phases 1–3A, ESC-080/090).
-- [x] Frontend Next.js 15 App Router scaffold, pages, Local Wallet, Core Wallet & Quiet Fintech UI (ESC-020..ESC-100).
-- [x] Deploy contracts to Avalanche Fuji testnet (`43113`) — xem `contracts/deployments/43113.json`.
-- [x] AI Agent tự động quét nền (`AGENT_AUTO=true`, `DEC-013`) + QR Nonce trước / OCR dự phòng (`OD-09`).
-- [x] Marketplace upgrade (`MKT-001..MKT-004`): SQLite WAL (`marketplace.db`), Listing/Purchase Request/TTL 30m/Bind Trade/Sync APIs, Next.js BFF HMAC + `/api/pin` magic bytes + auth session fail-closed, Shopee-style Marketplace UI (chỉ hiển thị listing thật, deposit-only 30% AVAX).
-- [x] `MKT-005` QA & Final Remediation (Security P1 `SEC-01..SEC-04` + Doc sync): `SESSION_SECRET` tách biệt và fail-closed trên non-`31337`, `REQUIRE_PROXY_SIGNATURE=true` bắt buộc trên Fuji `43113`, CSRF validation cho `/api/verify` và `/api/uris`, đồng bộ `README.md`, `docs/context/*`, `RISK_REGISTER.md`.
-- [ ] **Avalanche Fuji Manual Verification:** `NOT TESTED` end-to-end bản web đầy đủ trên Fuji thật (chờ Owner nạp AVAX ví agent >= 0.5 AVAX, cấu hình `backend/.env` và `frontend/.env.local`).
-- [ ] Pitch Deck / Slide + Video Demo + Live Fuji dApp links (`PENDING-OWNER`).
+- [x] Repo folder structure + context docs consolidated.
+- [x] Smart Contracts + AI Pipeline + Backend + Next.js 15 Frontend App Router (Local Wallet, Core Wallet, Quiet Fintech UI & BFF HMAC) hoàn thiện và hợp nhất trên `main` (`f6b909a`).
+- [x] Deploy contracts to Avalanche Fuji testnet (`43113`) — xem [contracts/deployments/43113.json](../../contracts/deployments/43113.json).
+- [x] AI Agent tự động quét nền (`AGENT_AUTO=true`, `DEC-013`) + QR Nonce trước / OCR dự phòng.
+- [x] Bảo mật BFF & Marketplace cho triển khai thực tế: fail-closed `SESSION_SECRET` trên non-`31337`, `REQUIRE_PROXY_SIGNATURE=true`, CSRF `/api/verify` + `/api/uris` + `/api/pin`, magic bytes IPFS, `README.md` chuẩn hóa.
+- [x] Kiểm chứng thực tế UI + Snowtrace trên Avalanche Fuji (`43113`): `Trade #1` & `#2` (`Cancelled`), `Trade #3` (`ResolvedDispute(address(0), 0)`), và `Trade #4` (`Cancelled` sau hoàn cọc timeout qua tx `0x82ab62...4bbd`, `Escrow balance = 0.000000 AVAX` — xem [FUJI-TRADE-4-QA.md](../test-evidence/FUJI-TRADE-4-QA.md)).
+- [ ] **Hai luồng Fuji còn thiếu khi quay video demo (`ResolvedClean` & `ResolvedDispute` phạt 5%):** Thực hiện trực tiếp bằng Core Wallet khi quay video theo [SLIDE_AND_VIDEO_SCRIPT.md](../specs/SLIDE_AND_VIDEO_SCRIPT.md).
+- [ ] Pitch Deck / Slide (Bắt buộc) + Video Demo 2–3p (Bắt buộc) trên [README.md](../../README.md) §5 (`PENDING-OWNER`; Live Fuji dApp URL là `OPTIONAL`).
 
 ## Module status
 
 | Module | Folder | Status | Verification & Notes | Owner |
 |---|---|---|---|---|
-| Smart Contract | `contracts/src/` | ✅ DEPLOYED (`43113`) | `Escrow.sol`, `CollectibleToken.sol`; test bằng `cd contracts && forge test` (số liệu xem `MKT-005-remediation-report.md`) | Quốc |
-| AI Pipeline | `ai-pipeline/` | ✅ IMPLEMENTED | pHash + ORB + QR/OCR nonce + video keyframe + CLIP optional (`pytest -rs`) | Quốc |
-| Backend + Marketplace | `backend/` | ✅ HARDENED (`MKT-002`, `MKT-005`) | FastAPI + SQLite WAL (`DATA_DIR/marketplace.db`), HMAC + replay guard + fail-closed `43113` (`REQUIRE_PROXY_SIGNATURE=true`) | Quốc |
-| Frontend + BFF | `frontend/` | ✅ CODED (`MKT-003`, `MKT-004`, `MKT-005`) | Next.js 15 App Router, BFF HMAC proxy, fail-closed `SESSION_SECRET`, CSRF `/api/verify` + `/api/uris`, Core/Local Wallet | Quốc |
+| Smart Contract | `contracts/src/` | ✅ DEPLOYED (`43113`) | `Escrow.sol`, `CollectibleToken.sol`; Foundry `forge test` trên `main (f6b909a)`: `80 passed, 0 failed, 0 skipped` (gồm 2 invariant `256 runs, 51,200 calls`) | Quốc |
+| AI Pipeline | `ai-pipeline/` | ✅ IMPLEMENTED | pHash + ORB + QR/OCR nonce + video keyframe + CLIP optional (`pytest -rs` trên `main (f6b909a)`: `185 passed, 0 failed, 0 skipped`) | Quốc |
+| Backend + Marketplace | `backend/` | ✅ HARDENED & READY (`43113`) | FastAPI + SQLite WAL (`marketplace.db`), HMAC + replay guard + `REQUIRE_PROXY_SIGNATURE=true`, `AGENT_AUTO=true` | Quốc |
+| Frontend + BFF | `frontend/` | ✅ MERGED (`f6b909a`) | Next.js 15 App Router, BFF HMAC proxy, fail-closed `SESSION_SECRET`, CSRF `/api/verify` + `/api/uris`, Core/Local Wallet (`npm test`: `67 passed`, `tsc --noEmit` & `next build` pass) | Quốc |
 | Deploy Fuji (`43113`) | `contracts/deployments/43113.json` | ✅ DEPLOYED | Escrow `0x19D053c84941411888f5b9e40c854365fdd4eb00`, CDU Token `0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78`, deploy block `60980241`, windows `600s/600s/90s` | Quốc |
-| Slide + Video + Live URL | `README.md`, `docs/specs/` | ⏳ `PENDING-OWNER` | Cần link thật sau khi Owner triển khai và quay demo | Quốc |
+| Fuji E2E & QA Evidence | `docs/test-evidence/` | 🟡 PARTIAL | Đã xác minh thực tế UI + Snowtrace `Trade #1..#4` ([FUJI-TRADE-4-QA.md](../test-evidence/FUJI-TRADE-4-QA.md)); `Trade #4` đã hoàn cọc về `0 AVAX`. Còn `ResolvedClean` & phạt `5%` quay lúc làm video | Quốc |
+| Slide + Video + Links | `README.md`, `docs/specs/` | ⏳ `PENDING-OWNER` | Kịch bản 11 slide & video 2–3p sẵn sàng ([SLIDE_AND_VIDEO_SCRIPT.md](../specs/SLIDE_AND_VIDEO_SCRIPT.md)); `README.md` §5 chờ điền link Video/Slide (`Live Fuji dApp` là `OPTIONAL`) | Quốc |
 
 ## Test commands
 
@@ -40,21 +40,19 @@ cd contracts && forge test
 cd frontend && npx tsc --noEmit && npm test && npm run build
 ```
 
-> Lưu ý `npm run lint`: ESLint (`eslint` / `.eslintrc`) chưa được cấu hình hoàn tất trên repo (`npm run lint` thất bại vì interactive prompt / thiếu package — ghi nhận tại `TST-03`).
+> Lưu ý `npm run lint`: ESLint chưa được cấu hình đầy đủ trên repo (`npm run lint` thất bại vì chưa có `.eslintrc`/interactive prompt).
 
-## Blockers hiện tại (cần Owner xử lý trước khi Verify Fuji / Final Freeze)
+## Blockers & Tồn đọng hiện tại (trước hạn nộp UniHack `21/11/2026 23:59 VN`)
 
-- Ví AI Agent trên Fuji (`0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081`) mới ghi nhận số dư `0.05 AVAX` (< ngưỡng Release Gate `0.5 AVAX`) → cần Owner faucet thêm AVAX.
-- Môi trường chạy Fuji thật chưa cấu hình đầy đủ bí mật cục bộ: thiếu `backend/.env` (`AGENT_PRIVATE_KEY`, `ATTEST_API_KEY`, `REQUIRE_PROXY_SIGNATURE=true`, `RPC_URL`, `ESCROW_ADDRESS`) và `frontend/.env.local` (`SESSION_SECRET`, `ATTEST_API_KEY`, `PINATA_JWT`, `REQUIRE_PROXY_SIGNATURE=true`).
-- Chưa có E2E verification thật trên Fuji `43113` cho luồng Marketplace + IPFS Pinata + AI Agent + Browser UI.
-- Các quyết định `DEC-018+` mới đề xuất ở trạng thái `PROPOSED` và các mục `BLOCKED-OWNER` trong `RISK_REGISTER.md` cần Owner rà soát/chốt.
-- Demo Video, Pitch Deck, Live Fuji dApp URL đang ở trạng thái `PENDING-OWNER`.
+- **Thiếu bằng chứng on-chain của 2 luồng chính khi quay demo:** Trên Fuji hiện có `Cancelled` (`Trade #1`, `#2`, `#4`) và `ResolvedDispute(address(0), 0)` (`Trade #3`); cần quay đủ 1 `ResolvedClean` và 1 `ResolvedDispute` phạt `5%` (`violator != address(0)`) trong video demo.
+- **Link nộp bài bắt buộc trong `README.md` §5:** `Demo Video` và `Pitch Deck / Slide` đang ở trạng thái `PENDING-OWNER` (`Live Fuji dApp` là `OPTIONAL`). Mọi link nộp phải mở được ở chế độ ẩn danh không cần đăng nhập (GitHub public hoặc mời `tuantqse90`).
+- **Quản trị quyết định & cấu hình còn mở:** `DEC-018..022` giữ trạng thái `PROPOSED` trong [DECISION_LOG.md](DECISION_LOG.md) chờ Owner duyệt chính thức; `npm run lint` (ESLint) chưa cấu hình; ví Agent (`0x579e...7081`) hiện còn `0.420000 AVAX` (khuyến nghị nạp thêm `>= 0.1 AVAX` Faucet nếu muốn đạt `>= 0.5 AVAX` trước Demo Day).
 
 ## Timeline
 
 | Giai đoạn | Việc |
 |---|---|
-| **10–11/11** | Tạo ví, faucet, deploy Fuji |
-| 12–15/11 | Nâng cấp Marketplace (`MKT-001..MKT-004`), QA (`MKT-005`) và Security/Doc Remediation (`MKT-005`) |
-| **Chờ Owner** | Cấu hình `.env` Fuji, faucet agent >= `0.5 AVAX`, chạy Avalanche Fuji Manual Verification |
-| **Sau Manual QA** | Commit/Merge, Slide, Video demo, kiểm tra link công khai (Final Freeze & Submission) |
+| **10–15/11** | Deploy Fuji (`43113`), nâng cấp Marketplace off-chain, bảo mật BFF & hợp nhất PR #13 vào `main` (`f6b909a`) |
+| **17/11** | Kiểm thử Fuji `Trade #1..#4`, xác minh hoàn cọc `Trade #4` (`Cancelled`, `Escrow = 0 AVAX`) và hoàn thiện kịch bản 11 slide/video |
+| **Kế tiếp (Owner)** | Quay video Clean Flow + Dispute 5% trên Fuji, xuất bản Slide/Video công khai và cập nhật `README.md` §5 |
+| **Trước 21/11 23:59 VN** | Nộp hồ sơ UniHack tại `team1vn.xyz` (và dự phòng Builder Hub nếu cần); Demo Day `30/11/2026` |
