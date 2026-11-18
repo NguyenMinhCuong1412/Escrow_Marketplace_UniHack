@@ -148,6 +148,8 @@ Một số đường dẫn chính trên giao diện:
 - `/trade/3/report` — Xem báo cáo AI giải trình & đối chiếu `keccak256` on-chain
 - `/auth` hoặc `/auth/local` — Kết nối ví Core/MetaMask hoặc tạo Ví thử nghiệm trên trình duyệt
 
+*(Lưu ý: `/trades` và `/trade/<id>` yêu cầu kết nối & xác thực ví trước — xem Bước 7; nếu chưa kết nối, giao diện tự chuyển hướng sang `/auth`.)*
+
 ---
 
 ## Bước 7: Kết nối ví thử nghiệm Avalanche Fuji (`Chain ID: 43113`)
@@ -216,6 +218,6 @@ docker compose up --build -d
 | `Bind for 0.0.0.0:3000 failed: port is already allocated` (hoặc cổng `8000`) | Đã có ứng dụng khác chạy trên cổng `3000` hoặc `8000` | Tắt tiến trình đang chiếm cổng cũ rồi chạy lại `docker compose up -d` |
 | Upload ảnh báo `503` / `Thiếu PINATA_JWT` | Chưa cấu hình `PINATA_JWT` (hệ thống chặn fail-closed trên Fuji `43113`) | Tạo file `.env` từ `.env.example`, điền `PINATA_JWT=...`, rồi chạy `docker compose up -d` |
 | Không tạo được tin đăng / báo `401` khi dùng Safari trên `127.0.0.1` | Safari có thể từ chối cookie `Secure` trên HTTP `127.0.0.1` | Mở bằng `http://localhost:3000` hoặc dùng **Chrome / Edge / Firefox / Brave** |
-| Trang chi tiết trade / `/health` báo thiếu `AGENT_PRIVATE_KEY` | Chưa điền khóa ví AI Agent (mặc định tắt vì lý do bảo mật) | Nếu muốn thử tính năng Auto-Agent `attest()`, cấu hình `AGENT_PRIVATE_KEY` + `AGENT_AUTO=true` trong `.env` và chạy `docker compose up -d` |
+| QR Nonce / trang chi tiết trade / `/health` báo thiếu `AGENT_PRIVATE_KEY` | Chưa điền khóa ví AI Agent (mặc định tắt vì lý do bảo mật) | Nếu muốn thử tính năng Auto-Agent `attest()` và tạo QR Nonce, cấu hình `AGENT_PRIVATE_KEY` + `AGENT_AUTO=true` trong `.env` và chạy `docker compose up -d` |
 | Tải ảnh IPFS bị chậm hoặc lỗi `HTTP 429` | Gateway công cộng `gateway.pinata.cloud` bị giới hạn tần suất | Thêm gateway riêng của bạn vào `.env`: `IPFS_GATEWAY=https://<ten-gateway>.mypinata.cloud/ipfs/` rồi chạy `docker compose up -d` |
 | Giao dịch ví báo sai mạng | Ví đang ở Avalanche Mainnet (`43114`) hoặc Ethereum (`1`) | Chuyển ví sang **Avalanche Fuji Testnet (`Chain ID: 43113`)** |
