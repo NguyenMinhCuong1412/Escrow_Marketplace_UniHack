@@ -2,7 +2,7 @@
 Collectibles marketplace with on-chain 30% AVAX deposit-only escrow on Avalanche C-Chain (Fuji `43113` / Anvil `31337`) and AI evidence attestation.
 Tech stack: Next.js 15 App Router (BFF HMAC + Local Wallet + Wagmi) · FastAPI + SQLite WAL (Python 3.12) · OpenCV, Tesseract OCR, pHash · Solidity (Foundry 1.5.1, OpenZeppelin v5.1) · Avalanche Fuji.
 
-> **Người mới chạy thử trên máy cá nhân?** Xem hướng dẫn chi tiết từng bước (Windows / Ubuntu / macOS, chỉ cần Git + Docker): [**RUN_LOCAL_BEGINNER.md**](RUN_LOCAL_BEGINNER.md)
+> **Người mới chạy thử trên máy cá nhân hoặc GitHub Codespaces?** Xem hướng dẫn chi tiết từng bước (Windows / Ubuntu & Debian / Linux khác / macOS / GitHub Codespaces, chỉ cần Git + Docker): [**RUN_LOCAL_BEGINNER.md**](RUN_LOCAL_BEGINNER.md)
 
 ---
 

@@ -17,4 +17,19 @@ if [ -f "$SECRETS_FILE" ]; then
   fi
 fi
 
+if [ -n "${CODESPACE_NAME:-}" ]; then
+  CS_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
+  CS_ORIGIN="https://${CODESPACE_NAME}-3000.${CS_DOMAIN}"
+  case ",${ALLOWED_ORIGINS:-}," in
+    *,"${CS_ORIGIN}",*) ;;
+    *)
+      if [ -n "${ALLOWED_ORIGINS:-}" ]; then
+        export ALLOWED_ORIGINS="${ALLOWED_ORIGINS},${CS_ORIGIN}"
+      else
+        export ALLOWED_ORIGINS="${CS_ORIGIN}"
+      fi
+      ;;
+  esac
+fi
+
 exec "$@"

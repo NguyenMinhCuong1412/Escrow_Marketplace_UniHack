@@ -1,6 +1,10 @@
 # Build from repository root: docker build -f frontend/Dockerfile -t escrow-frontend .
 FROM node:20-slim AS builder
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -14,6 +18,7 @@ ARG NEXT_PUBLIC_DEPLOY_BLOCK=60980241
 ARG NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000
 ARG NEXT_PUBLIC_IPFS_GATEWAY=https://gateway.pinata.cloud/ipfs/
 ARG NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=3a8170812b534d0ff9d794f19a901d64
+ARG BACKEND_URL=http://127.0.0.1:8000
 
 ENV NEXT_PUBLIC_CHAIN_ID=$NEXT_PUBLIC_CHAIN_ID \
     NEXT_PUBLIC_ESCROW_ADDRESS=$NEXT_PUBLIC_ESCROW_ADDRESS \
@@ -22,6 +27,7 @@ ENV NEXT_PUBLIC_CHAIN_ID=$NEXT_PUBLIC_CHAIN_ID \
     NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL \
     NEXT_PUBLIC_IPFS_GATEWAY=$NEXT_PUBLIC_IPFS_GATEWAY \
     NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=$NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID \
+    BACKEND_URL=$BACKEND_URL \
     NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build && rm -rf .next/cache && npm prune --omit=dev
