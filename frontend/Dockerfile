@@ -24,7 +24,7 @@ ENV NEXT_PUBLIC_CHAIN_ID=$NEXT_PUBLIC_CHAIN_ID \
     NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=$NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID \
     NEXT_TELEMETRY_DISABLED=1
 
-RUN npm run build
+RUN npm run build && rm -rf .next/cache && npm prune --omit=dev
 
 FROM node:20-slim AS runner
 
