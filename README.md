@@ -2,6 +2,8 @@
 Collectibles marketplace with on-chain 30% AVAX deposit-only escrow on Avalanche C-Chain (Fuji `43113` / Anvil `31337`) and AI evidence attestation.
 Tech stack: Next.js 15 App Router (BFF HMAC + Local Wallet + Wagmi) · FastAPI + SQLite WAL (Python 3.12) · OpenCV, Tesseract OCR, pHash · Solidity (Foundry 1.5.1, OpenZeppelin v5.1) · Avalanche Fuji.
 
+> **Người mới chạy thử trên máy cá nhân?** Xem hướng dẫn chi tiết từng bước (Windows / Ubuntu / macOS, chỉ cần Git + Docker): [**RUN_LOCAL_BEGINNER.md**](RUN_LOCAL_BEGINNER.md)
+
 ---
 
 ## 1. Giới thiệu sản phẩm
@@ -33,6 +35,20 @@ Escrow Marketplace là sàn giao dịch đồ sưu tầm nhiều người dùng 
 - **Giới hạn quyền AI Agent & Trọng tài (`onlyAgent` / `onlyOwner`):** AI Agent chỉ được gọi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence` để ghi nhận kết quả kiểm tra và gắn cờ cảnh báo. Mọi tranh chấp (`flagged=true` hoặc khiếu nại qua `fileComplaint()`) do **Owner / Arbiter (một ví EOA)** xử lý on-chain qua `resolveDispute()`.
 
 ## 3. Hướng dẫn chạy môi trường Local
+
+### Cách 1: Chạy nhanh bằng Docker Compose *(Khuyên dùng — xem chi tiết tại [RUN_LOCAL_BEGINNER.md](RUN_LOCAL_BEGINNER.md))*
+
+Chỉ cần **Git** và **Docker** (tự động cấu hình hợp đồng Fuji `43113` và tự sinh an toàn `SESSION_SECRET` / `ATTEST_API_KEY` trong Docker volume `runtime_secrets` khi khởi chạy lần đầu):
+
+```bash
+git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
+cd Escrow_Marketplace_UniHack
+docker compose up --build -d
+```
+
+Sau đó mở `http://127.0.0.1:3000` (hoặc `http://localhost:3000`). Nếu muốn bật upload IPFS (`PINATA_JWT`) hoặc AI Auto-Agent ký `attest()` (`AGENT_PRIVATE_KEY` + `AGENT_AUTO=true`), sao chép `.env.example` thành `.env`, điền giá trị rồi chạy `docker compose up -d`.
+
+### Cách 2: Chạy thủ công từng dịch vụ (Dev / Anvil local)
 
 ### Bước 1: Khởi động Local Blockchain (Anvil)
 ```bash

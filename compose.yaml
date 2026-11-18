@@ -1,0 +1,105 @@
+services:
+  init-secrets:
+    image: python:3.12-slim
+    volumes:
+      - ./docker/init_secrets.py:/init_secrets.py:ro
+      - runtime_secrets:/run/secrets-env
+    environment:
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      ATTEST_API_KEY: ${ATTEST_API_KEY:-}
+    command: ["python", "/init_secrets.py"]
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      init-secrets:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      RPC_URL: ${RPC_URL:-https://api.avax-test.network/ext/bc/C/rpc}
+      CHAIN_ID: ${CHAIN_ID:-43113}
+      ESCROW_ADDRESS: ${ESCROW_ADDRESS:-0x19D053c84941411888f5b9e40c854365fdd4eb00}
+      DATA_DIR: /data
+      ALLOW_LOCAL_HOSTS: ${ALLOW_LOCAL_HOSTS:-false}
+      ENFORCE_EVIDENCE_HASH: ${ENFORCE_EVIDENCE_HASH:-true}
+      VERIFY_CHAIN_BEFORE_TTL_RELEASE: ${VERIFY_CHAIN_BEFORE_TTL_RELEASE:-true}
+      REQUIRE_PROXY_SIGNATURE: ${REQUIRE_PROXY_SIGNATURE:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      IPFS_GATEWAY: ${IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      AGENT_PRIVATE_KEY: ${AGENT_PRIVATE_KEY:-}
+      AGENT_AUTO: ${AGENT_AUTO:-false}
+      ATTEST_API_KEY: ${ATTEST_API_KEY:-}
+    volumes:
+      - backend_data:/data
+      - runtime_secrets:/run/secrets-env:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; d=json.loads(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).read()); assert 'tesseract' in d"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
+        NEXT_PUBLIC_ESCROW_ADDRESS: ${NEXT_PUBLIC_ESCROW_ADDRESS:-0x19D053c84941411888f5b9e40c854365fdd4eb00}
+        NEXT_PUBLIC_TOKEN_ADDRESS: ${NEXT_PUBLIC_TOKEN_ADDRESS:-0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78}
+        NEXT_PUBLIC_DEPLOY_BLOCK: ${NEXT_PUBLIC_DEPLOY_BLOCK:-60980241}
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://127.0.0.1:8000}
+        NEXT_PUBLIC_IPFS_GATEWAY: ${NEXT_PUBLIC_IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
+        NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-3a8170812b534d0ff9d794f19a901d64}
+    depends_on:
+      init-secrets:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
+      NEXT_PUBLIC_CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
+      NEXT_PUBLIC_ESCROW_ADDRESS: ${NEXT_PUBLIC_ESCROW_ADDRESS:-0x19D053c84941411888f5b9e40c854365fdd4eb00}
+      NEXT_PUBLIC_TOKEN_ADDRESS: ${NEXT_PUBLIC_TOKEN_ADDRESS:-0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78}
+      NEXT_PUBLIC_DEPLOY_BLOCK: ${NEXT_PUBLIC_DEPLOY_BLOCK:-60980241}
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://127.0.0.1:8000}
+      NEXT_PUBLIC_IPFS_GATEWAY: ${NEXT_PUBLIC_IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
+      BACKEND_URL: http://backend:8000
+      REQUIRE_PROXY_SIGNATURE: ${REQUIRE_PROXY_SIGNATURE:-true}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      PINATA_JWT: ${PINATA_JWT:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      ATTEST_API_KEY: ${ATTEST_API_KEY:-}
+    volumes:
+      - runtime_secrets:/run/secrets-env:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+  runtime_secrets:

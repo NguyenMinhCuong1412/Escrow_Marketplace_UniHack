@@ -16,6 +16,8 @@ COPY backend/attest_service.py backend/auto_agent.py backend/chain.py backend/db
 COPY backend/abi backend/abi
 # Địa chỉ deploy (nếu có) — có thể thay bằng biến ESCROW_ADDRESS
 COPY contracts/deployments contracts/deployments
+COPY docker/backend-entrypoint.sh /usr/local/bin/backend-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/backend-entrypoint.sh && chmod +x /usr/local/bin/backend-entrypoint.sh
 
 ENV DATA_DIR=/data PYTHONUNBUFFERED=1
 ENV ALLOW_LOCAL_HOSTS=false
@@ -23,4 +25,5 @@ ENV CORS_ORIGINS=""
 VOLUME /data
 WORKDIR /app/backend
 EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/backend-entrypoint.sh"]
 CMD ["uvicorn", "attest_service:app", "--host", "0.0.0.0", "--port", "8000"]
