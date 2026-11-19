@@ -157,6 +157,13 @@ export interface PaginatedResponse<T> {
   page: number;
   limit: number;
   total_pages: number;
+  _notModified?: boolean;
+}
+
+export interface MarketplaceRequestOptions {
+  signal?: AbortSignal;
+  sessionScope?: string | null;
+  chainScope?: string | number | null;
 }
 
 export interface TradeSyncDto {
@@ -405,14 +412,301 @@ export function normalizeMarketplaceErrorResponse(
 // API Helpers gọi Next.js BFF `/api/*`
 // ---------------------------------------------------------------------------
 
+export const POLL_BASE_INTERVAL_MS = 5_000;
+export const POLL_MAX_BACKOFF_MS = 30_000;
+export const MAX_ETAG_CACHE_ENTRIES = 50;
+
+/**
+ * Chuẩn hóa chuỗi thời gian chờ polling backoff:
+ * - consecutiveFailures <= 0 -> 5,000 ms (5s)
+ * - consecutiveFailures == 1 -> 10,000 ms (10s)
+ * - consecutiveFailures == 2 -> 20,000 ms (20s)
+ * - consecutiveFailures >= 3 -> 30,000 ms (30s)
+ */
+export function computePollDelayMs(
+  consecutiveFailures: number,
+  baseIntervalMs = POLL_BASE_INTERVAL_MS,
+  maxBackoffMs = POLL_MAX_BACKOFF_MS
+): number {
+  if (!Number.isFinite(consecutiveFailures) || consecutiveFailures <= 0) {
+    return baseIntervalMs;
+  }
+  const exp = Math.min(10, Math.floor(consecutiveFailures));
+  return Math.min(maxBackoffMs, baseIntervalMs * Math.pow(2, exp));
+}
+
+export interface PollExecutionContext {
+  signal: AbortSignal;
+  silent: boolean;
+  seq: number;
+  isCurrent: () => boolean;
+}
+
+export interface NonOverlappingPollControllerOptions {
+  baseIntervalMs?: number;
+  maxBackoffMs?: number;
+  canPoll?: () => boolean;
+  isVisible?: () => boolean;
+  setTimer?: (fn: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  clearTimer?: (id: ReturnType<typeof setTimeout>) => void;
+  runTask: (ctx: PollExecutionContext) => Promise<void>;
+}
+
+export interface NonOverlappingPollController {
+  trigger: (opts?: { silent?: boolean }) => Promise<void>;
+  onVisibilityOrStateChange: () => void;
+  dispose: () => void;
+  getState: () => {
+    inFlight: boolean;
+    seq: number;
+    consecutiveFailures: number;
+    hasScheduledTimer: boolean;
+  };
+}
+
+export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (err && typeof err === 'object' && (err as { name?: string }).name === 'AbortError') {
+    return true;
+  }
+  return false;
+}
+
+export function createNonOverlappingPollController(
+  options: NonOverlappingPollControllerOptions
+): NonOverlappingPollController {
+  const baseIntervalMs = options.baseIntervalMs ?? POLL_BASE_INTERVAL_MS;
+  const maxBackoffMs = options.maxBackoffMs ?? POLL_MAX_BACKOFF_MS;
+  const setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = options.clearTimer ?? ((id) => clearTimeout(id));
+  const checkVisible =
+    options.isVisible ??
+    (() =>
+      typeof document === 'undefined' ||
+      document.visibilityState === 'visible');
+  const checkCanPoll = options.canPoll ?? (() => true);
+
+  let mounted = true;
+  let inFlight = false;
+  let seq = 0;
+  let consecutiveFailures = 0;
+  let timerId: ReturnType<typeof setTimeout> | null = null;
+  let abortController: AbortController | null = null;
+
+  function cancelScheduledTimer(): void {
+    if (timerId !== null) {
+      clearTimer(timerId);
+      timerId = null;
+    }
+  }
+
+  function scheduleNext(): void {
+    cancelScheduledTimer();
+    if (!mounted || inFlight) return;
+    if (!checkVisible() || !checkCanPoll()) return;
+    const delay = computePollDelayMs(
+      consecutiveFailures,
+      baseIntervalMs,
+      maxBackoffMs
+    );
+    timerId = setTimer(() => {
+      timerId = null;
+      void trigger({ silent: true });
+    }, delay);
+  }
+
+  async function trigger(opts?: { silent?: boolean }): Promise<void> {
+    if (!mounted) return;
+    const silent = Boolean(opts?.silent);
+
+    if (silent) {
+      if (inFlight) return;
+      if (!checkVisible() || !checkCanPoll()) {
+        cancelScheduledTimer();
+        return;
+      }
+    } else {
+      cancelScheduledTimer();
+      consecutiveFailures = 0;
+      if (abortController) {
+        abortController.abort();
+        abortController = null;
+      }
+    }
+
+    cancelScheduledTimer();
+    const currentSeq = ++seq;
+    const controller = new AbortController();
+    abortController = controller;
+    inFlight = true;
+
+    const isCurrent = () =>
+      mounted && !controller.signal.aborted && currentSeq === seq;
+
+    try {
+      await options.runTask({
+        signal: controller.signal,
+        silent,
+        seq: currentSeq,
+        isCurrent,
+      });
+      if (isCurrent()) {
+        consecutiveFailures = 0;
+      }
+    } catch (err) {
+      if (isCurrent() && !isAbortError(err, controller.signal)) {
+        consecutiveFailures += 1;
+      }
+    } finally {
+      if (currentSeq === seq) {
+        inFlight = false;
+        abortController = null;
+        if (mounted && checkVisible() && checkCanPoll()) {
+          scheduleNext();
+        }
+      }
+    }
+  }
+
+  function onVisibilityOrStateChange(): void {
+    if (!mounted) return;
+    if (!checkVisible() || !checkCanPoll()) {
+      cancelScheduledTimer();
+      return;
+    }
+    consecutiveFailures = 0;
+    if (!inFlight) {
+      cancelScheduledTimer();
+      void trigger({ silent: true });
+    }
+  }
+
+  function dispose(): void {
+    mounted = false;
+    seq += 1;
+    cancelScheduledTimer();
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    inFlight = false;
+  }
+
+  return {
+    trigger,
+    onVisibilityOrStateChange,
+    dispose,
+    getState: () => ({
+      inFlight,
+      seq,
+      consecutiveFailures,
+      hasScheduledTimer: timerId !== null,
+    }),
+  };
+}
+
 function buildQueryString(params: Record<string, unknown>): string {
   const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
+  const sortedKeys = Object.keys(params).sort();
+  for (const k of sortedKeys) {
+    const v = params[k];
     if (v === undefined || v === null || v === '') continue;
     qs.set(k, String(v));
   }
   const str = qs.toString();
   return str ? `?${str}` : '';
+}
+
+interface ListingsEtagCacheEntry {
+  etag: string;
+  payload: PaginatedResponse<ListingDto>;
+  epoch: number;
+}
+
+const listingsEtagCache = new Map<string, ListingsEtagCacheEntry>();
+let cacheEpoch = 0;
+let activeScopeKey: string | null = null;
+
+function normalizeSessionScope(rawScope?: string | null): string {
+  if (!rawScope || typeof rawScope !== 'string') return 'anon';
+  const trimmed = rawScope.trim().toLowerCase();
+  if (!trimmed || trimmed === 'anon') return 'anon';
+  // Chỉ chấp nhận địa chỉ ví chuẩn 0x...40 hex để tuyệt đối không lưu JWT/token/secret vào khóa cache
+  if (/^0x[0-9a-f]{40}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return 'anon';
+}
+
+function normalizeChainScope(rawChain?: string | number | null): string {
+  const candidate =
+    rawChain !== undefined && rawChain !== null && String(rawChain).trim() !== ''
+      ? String(rawChain).trim()
+      : typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_CHAIN_ID
+        ? String(process.env.NEXT_PUBLIC_CHAIN_ID).trim()
+        : 'default';
+  if (/^\d{1,12}$/.test(candidate) || candidate === 'default') {
+    return candidate;
+  }
+  return 'default';
+}
+
+function cloneListingsPayload(
+  payload: PaginatedResponse<ListingDto>
+): PaginatedResponse<ListingDto> {
+  const items = Array.isArray(payload.items)
+    ? payload.items.map((item) => ({
+        ...item,
+        images: Array.isArray(item.images)
+          ? item.images.map((img) => ({ ...img }))
+          : [],
+        warnings: Array.isArray(item.warnings)
+          ? item.warnings.map((w) => ({ ...w }))
+          : [],
+        linked_trades: Array.isArray(item.linked_trades)
+          ? item.linked_trades.map((lt) => ({ ...lt }))
+          : [],
+      }))
+    : [];
+  return {
+    total: payload.total,
+    page: payload.page,
+    limit: payload.limit,
+    total_pages: payload.total_pages,
+    items,
+  };
+}
+
+function setListingsEtagCacheEntry(
+  cacheKey: string,
+  entry: ListingsEtagCacheEntry
+): void {
+  if (listingsEtagCache.has(cacheKey)) {
+    listingsEtagCache.delete(cacheKey);
+  } else if (listingsEtagCache.size >= MAX_ETAG_CACHE_ENTRIES) {
+    const oldestKey = listingsEtagCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      listingsEtagCache.delete(oldestKey);
+    }
+  }
+  listingsEtagCache.set(cacheKey, entry);
+}
+
+export function clearListingsEtagCache(): void {
+  cacheEpoch += 1;
+  listingsEtagCache.clear();
+}
+
+export function getListingsEtagCacheStats(): {
+  size: number;
+  epoch: number;
+  keys: string[];
+} {
+  return {
+    size: listingsEtagCache.size,
+    epoch: cacheEpoch,
+    keys: Array.from(listingsEtagCache.keys()),
+  };
 }
 
 function resolveIdempotencyKey(opts?: MutationOptions): string {
@@ -431,9 +725,14 @@ async function requestBff<T>(
     method: 'GET' | 'POST' | 'PATCH';
     body?: unknown;
     idempotencyKey?: string;
+    signal?: AbortSignal;
+    extraHeaders?: Record<string, string>;
   }
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(init.extraHeaders || {}),
+  };
   let encodedBody: string | undefined;
 
   if (init.body !== undefined && init.method !== 'GET') {
@@ -449,6 +748,7 @@ async function requestBff<T>(
     headers,
     body: encodedBody,
     cache: 'no-store',
+    signal: init.signal,
   });
 
   const payload = await res.json().catch(() => ({}));
@@ -459,26 +759,122 @@ async function requestBff<T>(
 }
 
 export async function browseListings(
-  query: ListingsQuery = {}
+  query: ListingsQuery = {},
+  opts?: MarketplaceRequestOptions
 ): Promise<PaginatedResponse<ListingDto>> {
+  const sessionScope = normalizeSessionScope(opts?.sessionScope);
+  const chainScope = normalizeChainScope(opts?.chainScope);
+  const scopeKey = `${sessionScope}::${chainScope}`;
+
+  if (
+    (opts?.sessionScope !== undefined || opts?.chainScope !== undefined) &&
+    activeScopeKey !== null &&
+    activeScopeKey !== scopeKey
+  ) {
+    clearListingsEtagCache();
+  }
+  if (opts?.sessionScope !== undefined || opts?.chainScope !== undefined) {
+    activeScopeKey = scopeKey;
+  }
+
   const qs = buildQueryString({ ...query });
-  return requestBff<PaginatedResponse<ListingDto>>(`/api/listings${qs}`, {
+  const path = `/api/listings${qs}`;
+  const cacheKey = `${scopeKey}::${path}`;
+  const requestEpoch = cacheEpoch;
+  const cachedAtStart = listingsEtagCache.get(cacheKey);
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (cachedAtStart && cachedAtStart.epoch === requestEpoch && cachedAtStart.etag) {
+    headers['If-None-Match'] = cachedAtStart.etag;
+  }
+
+  const res = await fetch(path, {
     method: 'GET',
+    headers,
+    cache: 'no-store',
+    signal: opts?.signal,
   });
+
+  if (res.status === 304) {
+    const currentCached = listingsEtagCache.get(cacheKey);
+    if (
+      currentCached &&
+      currentCached.epoch === cacheEpoch &&
+      requestEpoch === cacheEpoch
+    ) {
+      // Refresh LRU order on cache hit
+      listingsEtagCache.delete(cacheKey);
+      listingsEtagCache.set(cacheKey, currentCached);
+      const cloned = cloneListingsPayload(currentCached.payload);
+      return { ...cloned, _notModified: true };
+    }
+
+    // Fallback giới hạn đúng 1 lần retry GET không gửi If-None-Match khi cache đã bị xóa/evict giữa chừng
+    const retryEpoch = cacheEpoch;
+    const retryRes = await fetch(path, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: opts?.signal,
+    });
+    const retryPayload = await retryRes.json().catch(() => ({}));
+    if (!retryRes.ok || retryRes.status === 304) {
+      throw normalizeMarketplaceErrorResponse(
+        retryRes.status === 304 ? 502 : retryRes.status,
+        retryPayload
+      );
+    }
+    const normalizedRetry = cloneListingsPayload(
+      retryPayload as PaginatedResponse<ListingDto>
+    );
+    const retryEtag = retryRes.headers?.get?.('etag')?.trim() || '';
+    if (retryEtag && retryEpoch === cacheEpoch) {
+      setListingsEtagCacheEntry(cacheKey, {
+        etag: retryEtag,
+        payload: cloneListingsPayload(normalizedRetry),
+        epoch: retryEpoch,
+      });
+    }
+    return { ...normalizedRetry, _notModified: false };
+  }
+
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw normalizeMarketplaceErrorResponse(res.status, payload);
+  }
+
+  const normalizedPayload = cloneListingsPayload(
+    payload as PaginatedResponse<ListingDto>
+  );
+  const etag = res.headers?.get?.('etag')?.trim() || '';
+  if (etag && requestEpoch === cacheEpoch) {
+    setListingsEtagCacheEntry(cacheKey, {
+      etag,
+      payload: cloneListingsPayload(normalizedPayload),
+      epoch: requestEpoch,
+    });
+  }
+  return { ...normalizedPayload, _notModified: false };
 }
 
 export async function getMyListings(
-  query: Omit<ListingsQuery, 'seller'> = {}
+  query: Omit<ListingsQuery, 'seller'> = {},
+  opts?: MarketplaceRequestOptions
 ): Promise<PaginatedResponse<ListingDto>> {
   const qs = buildQueryString({ ...query });
   return requestBff<PaginatedResponse<ListingDto>>(`/api/listings/mine${qs}`, {
     method: 'GET',
+    signal: opts?.signal,
   });
 }
 
-export async function getListing(listingId: string): Promise<ListingDto> {
+export async function getListing(
+  listingId: string,
+  opts?: MarketplaceRequestOptions
+): Promise<ListingDto> {
   return requestBff<ListingDto>(`/api/listings/${encodeURIComponent(listingId)}`, {
     method: 'GET',
+    signal: opts?.signal,
   });
 }
 
@@ -486,21 +882,34 @@ export async function createListing(
   input: CreateListingInput,
   opts?: MutationOptions
 ): Promise<ListingDto> {
-  return requestBff<ListingDto>('/api/listings', {
-    method: 'POST',
-    body: input,
-    idempotencyKey: resolveIdempotencyKey(opts),
-  });
+  clearListingsEtagCache();
+  try {
+    return await requestBff<ListingDto>('/api/listings', {
+      method: 'POST',
+      body: input,
+      idempotencyKey: resolveIdempotencyKey(opts),
+    });
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function updateListing(
   listingId: string,
   input: UpdateListingInput
 ): Promise<ListingDto> {
-  return requestBff<ListingDto>(`/api/listings/${encodeURIComponent(listingId)}`, {
-    method: 'PATCH',
-    body: input,
-  });
+  clearListingsEtagCache();
+  try {
+    return await requestBff<ListingDto>(
+      `/api/listings/${encodeURIComponent(listingId)}`,
+      {
+        method: 'PATCH',
+        body: input,
+      }
+    );
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function createPurchaseRequest(
@@ -508,31 +917,43 @@ export async function createPurchaseRequest(
   input: CreatePurchaseRequestInput = { quantity: 1 },
   opts?: MutationOptions
 ): Promise<PurchaseRequestDto> {
-  return requestBff<PurchaseRequestDto>(
-    `/api/listings/${encodeURIComponent(listingId)}/requests`,
-    {
-      method: 'POST',
-      body: input,
-      idempotencyKey: resolveIdempotencyKey(opts),
-    }
-  );
+  clearListingsEtagCache();
+  try {
+    return await requestBff<PurchaseRequestDto>(
+      `/api/listings/${encodeURIComponent(listingId)}/requests`,
+      {
+        method: 'POST',
+        body: input,
+        idempotencyKey: resolveIdempotencyKey(opts),
+      }
+    );
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function listPurchaseRequests(
-  query: RequestsQuery = {}
+  query: RequestsQuery = {},
+  opts?: MarketplaceRequestOptions
 ): Promise<PaginatedResponse<PurchaseRequestDto>> {
   const qs = buildQueryString({ ...query });
   return requestBff<PaginatedResponse<PurchaseRequestDto>>(`/api/requests${qs}`, {
     method: 'GET',
+    signal: opts?.signal,
   });
 }
 
 export async function getPurchaseRequest(
-  requestId: string
+  requestId: string,
+  opts?: MarketplaceRequestOptions
 ): Promise<PurchaseRequestDto> {
-  return requestBff<PurchaseRequestDto>(`/api/requests/${encodeURIComponent(requestId)}`, {
-    method: 'GET',
-  });
+  return requestBff<PurchaseRequestDto>(
+    `/api/requests/${encodeURIComponent(requestId)}`,
+    {
+      method: 'GET',
+      signal: opts?.signal,
+    }
+  );
 }
 
 export async function decidePurchaseRequest(
@@ -540,14 +961,19 @@ export async function decidePurchaseRequest(
   input: DecisionInput,
   opts?: MutationOptions
 ): Promise<PurchaseRequestDto> {
-  return requestBff<PurchaseRequestDto>(
-    `/api/requests/${encodeURIComponent(requestId)}/decision`,
-    {
-      method: 'POST',
-      body: input,
-      idempotencyKey: resolveIdempotencyKey(opts),
-    }
-  );
+  clearListingsEtagCache();
+  try {
+    return await requestBff<PurchaseRequestDto>(
+      `/api/requests/${encodeURIComponent(requestId)}/decision`,
+      {
+        method: 'POST',
+        body: input,
+        idempotencyKey: resolveIdempotencyKey(opts),
+      }
+    );
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function cancelPurchaseRequest(
@@ -555,14 +981,19 @@ export async function cancelPurchaseRequest(
   input: CancelRequestInput = {},
   opts?: MutationOptions
 ): Promise<PurchaseRequestDto> {
-  return requestBff<PurchaseRequestDto>(
-    `/api/requests/${encodeURIComponent(requestId)}/cancel`,
-    {
-      method: 'POST',
-      body: input,
-      idempotencyKey: resolveIdempotencyKey(opts),
-    }
-  );
+  clearListingsEtagCache();
+  try {
+    return await requestBff<PurchaseRequestDto>(
+      `/api/requests/${encodeURIComponent(requestId)}/cancel`,
+      {
+        method: 'POST',
+        body: input,
+        idempotencyKey: resolveIdempotencyKey(opts),
+      }
+    );
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function bindRequestTrade(
@@ -570,35 +1001,47 @@ export async function bindRequestTrade(
   input: BindTradeInput,
   opts?: MutationOptions
 ): Promise<PurchaseRequestDto> {
-  return requestBff<PurchaseRequestDto>(
-    `/api/requests/${encodeURIComponent(requestId)}/bind-trade`,
-    {
-      method: 'POST',
-      body: input,
-      idempotencyKey: resolveIdempotencyKey(opts),
-    }
-  );
+  clearListingsEtagCache();
+  try {
+    return await requestBff<PurchaseRequestDto>(
+      `/api/requests/${encodeURIComponent(requestId)}/bind-trade`,
+      {
+        method: 'POST',
+        body: input,
+        idempotencyKey: resolveIdempotencyKey(opts),
+      }
+    );
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function syncMarketplaceTrade(
   tradeId: number | string | bigint
 ): Promise<TradeSyncDto> {
-  return requestBff<TradeSyncDto>(
-    `/api/trades/${encodeURIComponent(tradeId.toString())}/sync`,
-    {
-      method: 'POST',
-      body: {},
-    }
-  );
+  clearListingsEtagCache();
+  try {
+    return await requestBff<TradeSyncDto>(
+      `/api/trades/${encodeURIComponent(tradeId.toString())}/sync`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
+  } finally {
+    clearListingsEtagCache();
+  }
 }
 
 export async function getTradeMarketplaceContext(
-  tradeId: number | string | bigint
+  tradeId: number | string | bigint,
+  opts?: MarketplaceRequestOptions
 ): Promise<TradeContextDto> {
   return requestBff<TradeContextDto>(
     `/api/trades/${encodeURIComponent(tradeId.toString())}/context`,
     {
       method: 'GET',
+      signal: opts?.signal,
     }
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -18,8 +18,11 @@ import {
 import {
   avaxInputToWeiString,
   browseListings,
+  createNonOverlappingPollController,
+  isAbortError,
   LISTING_CATEGORIES,
   LISTING_CONDITIONS,
+  POLL_BASE_INTERVAL_MS,
   type ListingCategory,
   type ListingCondition,
   type ListingDto,
@@ -31,6 +34,7 @@ import {
   SORT_OPTIONS,
 } from '@/lib/marketplace-ui';
 import { ProductCard } from '@/components/ProductCard';
+import { useAuthSession } from '@/hooks/useAuthSession';
 
 const PAGE_LIMIT = 12;
 
@@ -71,6 +75,8 @@ const HomeGridSkeleton: React.FC = () => (
 const MarketplaceHomeContent: React.FC = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { address, chain, targetChain } = useAuthSession();
+  const chainId = chain?.id ?? targetChain?.id ?? null;
 
   const urlQuery = searchParams?.get('q') || '';
   const urlCategoryRaw = searchParams?.get('category') || null;
@@ -94,18 +100,27 @@ const MarketplaceHomeContent: React.FC = () => {
   const [minAvaxDraft, setMinAvaxDraft] = useState(urlMinAvax);
   const [maxAvaxDraft, setMaxAvaxDraft] = useState(urlMaxAvax);
   const [priceError, setPriceError] = useState<string | null>(null);
+  const priceErrorRef = useRef<string | null>(null);
+  priceErrorRef.current = priceError;
 
   const [items, setItems] = useState<ListingDto[]>([]);
+  const hasLoadedOnceRef = useRef(false);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [transientPollError, setTransientPollError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const pollControllerRef = useRef<ReturnType<typeof createNonOverlappingPollController> | null>(null);
 
   useEffect(() => {
     setMinAvaxDraft(urlMinAvax);
     setMaxAvaxDraft(urlMaxAvax);
   }, [urlMinAvax, urlMaxAvax]);
+
+  useEffect(() => {
+    pollControllerRef.current?.onVisibilityOrStateChange();
+  }, [priceError]);
 
   const updateUrlParams = useCallback(
     (patch: Record<string, string | null>, resetPage = true) => {
@@ -127,10 +142,6 @@ const MarketplaceHomeContent: React.FC = () => {
   );
 
   useEffect(() => {
-    let active = true;
-    setIsLoading(true);
-    setFetchError(null);
-
     const query: ListingsQuery = {
       status: 'ACTIVE',
       sort: urlSort,
@@ -155,38 +166,91 @@ const MarketplaceHomeContent: React.FC = () => {
         query.max_price_wei = maxWei;
       }
       if (minWei && maxWei && BigInt(minWei) > BigInt(maxWei)) {
-        setPriceError('Giá tối thiểu không được lớn hơn giá tối đa.');
+        const msg = 'Giá tối thiểu không được lớn hơn giá tối đa.';
+        priceErrorRef.current = msg;
+        setPriceError(msg);
         setIsLoading(false);
         return;
       }
+      priceErrorRef.current = null;
       setPriceError(null);
     } catch (err) {
-      setPriceError(err instanceof Error ? err.message : 'Khoảng giá AVAX không hợp lệ.');
+      const msg = err instanceof Error ? err.message : 'Khoảng giá AVAX không hợp lệ.';
+      priceErrorRef.current = msg;
+      setPriceError(msg);
       setIsLoading(false);
       return;
     }
 
-    browseListings(query)
-      .then((res) => {
-        if (!active) return;
-        setItems(res.items || []);
-        setTotal(res.total || 0);
-        setTotalPages(Math.max(1, res.total_pages || 1));
-      })
-      .catch((err) => {
-        if (!active) return;
-        setFetchError(
-          err instanceof Error
-            ? err.message
-            : 'Không thể tải danh sách sản phẩm từ Marketplace BFF.'
-        );
-      })
-      .finally(() => {
-        if (active) setIsLoading(false);
-      });
+    const controller = createNonOverlappingPollController({
+      baseIntervalMs: POLL_BASE_INTERVAL_MS,
+      canPoll: () => priceErrorRef.current === null,
+      runTask: async ({ signal, silent, isCurrent }) => {
+        if (!silent) {
+          setIsLoading(true);
+          setFetchError(null);
+          setTransientPollError(null);
+        }
+        try {
+          const res = await browseListings(query, {
+            signal,
+            sessionScope: address ?? 'anon',
+            chainScope: chainId ?? null,
+          });
+          if (!isCurrent()) return;
+
+          setFetchError(null);
+          setTransientPollError(null);
+          hasLoadedOnceRef.current = true;
+
+          // Khi 304 Not Modified ở lượt poll nền, không gọi setItems để tránh re-render grid vô ích
+          if (silent && res._notModified) {
+            return;
+          }
+
+          setItems(res.items || []);
+          setTotal(res.total || 0);
+          setTotalPages(Math.max(1, res.total_pages || 1));
+        } catch (err) {
+          if (!isCurrent() || isAbortError(err, signal)) {
+            return;
+          }
+          const message =
+            err instanceof Error
+              ? err.message
+              : 'Không thể tải danh sách sản phẩm từ Marketplace BFF.';
+          if (silent && hasLoadedOnceRef.current) {
+            setTransientPollError(message);
+          } else {
+            setFetchError(message);
+          }
+          throw err;
+        } finally {
+          if (!silent && isCurrent()) {
+            setIsLoading(false);
+          }
+        }
+      },
+    });
+
+    pollControllerRef.current = controller;
+    void controller.trigger({ silent: false });
+
+    const handleVisibilityChange = () => {
+      controller.onVisibilityOrStateChange();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
 
     return () => {
-      active = false;
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      controller.dispose();
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = null;
+      }
     };
   }, [
     urlQuery,
@@ -198,6 +262,8 @@ const MarketplaceHomeContent: React.FC = () => {
     urlMaxAvax,
     urlPage,
     reloadNonce,
+    address,
+    chainId,
   ]);
 
   const handleApplyPrice = (e: React.FormEvent) => {
@@ -474,6 +540,29 @@ const MarketplaceHomeContent: React.FC = () => {
           >
             <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Thử tải lại</span>
+          </button>
+        </div>
+      )}
+
+      {!fetchError && transientPollError && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs text-amber-800"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>
+              Tự động đồng bộ nền tạm gián đoạn ({transientPollError}). Danh sách hiện tại được giữ nguyên và sẽ tự thử lại.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReloadNonce((n) => n + 1)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-semibold shrink-0 cursor-pointer"
+          >
+            <RefreshCw className="w-3 h-3" aria-hidden="true" />
+            <span>Làm mới</span>
           </button>
         </div>
       )}
