@@ -3,7 +3,9 @@
 #   - init-ops-secrets: sinh riêng ATTEST_API_KEY, OPS_JWT_SECRET, SESSION_SECRET (0600) và tách file cho backend vs hosted frontend
 #   - backend: Keyless Public API (ENABLE_SHARED_AUTH=true, PINATA_JWT, KHÔNG giữ AGENT_PRIVATE_KEY)
 #   - agent-worker: Worker cô lập giữ AGENT_PRIVATE_KEY, dùng chung SQLite WAL (ops_backend_data:/data)
-#   - frontend (profile: ["hosted-ui"]): Web UI hosted tùy chọn cho Ops, không chứa OPS_JWT_SECRET
+#   - frontend (profile: ["hosted-ui"]): Web UI hosted tùy chọn, chạy Shared Auth qua http://backend:8000,
+#     không chứa bất kỳ Ops secret nào; SESSION_SECRET riêng trên volume ops_hosted_ui_secrets
+#   - backend & frontend chỉ publish trên 127.0.0.1 (đặt sau Caddy Auto-TLS, xem docker/Caddyfile.ops.example)
 # Lưu ý bảo mật: Tuyệt đối KHÔNG đặt ví Owner/Arbiter (0xCa76...39Eb) trong bất kỳ env hoặc container nào.
 
 services:
@@ -32,7 +34,8 @@ services:
       init-ops-secrets:
         condition: service_completed_successfully
     ports:
-      - "${OPS_API_PORT:-8000}:8000"
+      # P4-C1: chỉ bind loopback để Docker iptables không vượt ufw; truy cập công khai qua Caddy (api.<domain>)
+      - "${OPS_BIND_IP:-127.0.0.1}:${OPS_API_PORT:-8000}:8000"
     environment:
       RPC_URL: ${RPC_URL:-https://api.avax-test.network/ext/bc/C/rpc}
       CHAIN_ID: ${CHAIN_ID:-43113}
@@ -117,12 +120,11 @@ services:
         NEXT_PUBLIC_IPFS_GATEWAY: ${NEXT_PUBLIC_IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
         NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-3a8170812b534d0ff9d794f19a901d64}
     depends_on:
-      init-ops-secrets:
-        condition: service_completed_successfully
       backend:
         condition: service_healthy
     ports:
-      - "${OPS_UI_PORT:-3000}:3000"
+      # P4-C1: chỉ bind loopback; truy cập công khai qua Caddy (app.<domain>)
+      - "${OPS_UI_BIND_IP:-127.0.0.1}:${OPS_UI_PORT:-3000}:3000"
     environment:
       CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
       NEXT_PUBLIC_CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
@@ -131,15 +133,18 @@ services:
       NEXT_PUBLIC_DEPLOY_BLOCK: ${NEXT_PUBLIC_DEPLOY_BLOCK:-60980241}
       NEXT_PUBLIC_BACKEND_URL: /_backend
       NEXT_PUBLIC_IPFS_GATEWAY: ${NEXT_PUBLIC_IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
-      BACKEND_URL: http://backend:8000
-      REQUIRE_PROXY_SIGNATURE: ${REQUIRE_PROXY_SIGNATURE:-true}
+      # P4-C1: Hosted UI dùng Shared Auth (Ops JWT) qua mạng Docker nội bộ;
+      # tuyệt đối không nhận ATTEST_API_KEY, OPS_JWT_SECRET, PINATA_JWT, AGENT_PRIVATE_KEY hay SESSION_SECRET từ .env.
+      BFF_AUTH_MODE: shared
+      SHARED_API_URL: http://backend:8000
+      CLIENT_SECRETS_FILE: /run/client-secrets/session.env
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       COOKIE_SECURE: ${COOKIE_SECURE:-}
-      SESSION_SECRET: ${SESSION_SECRET:-}
-      ATTEST_API_KEY: ${ATTEST_API_KEY:-}
+      TRADE_INDEX_ENABLED: ${TRADE_INDEX_ENABLED:-true}
     volumes:
-      - ops_frontend_secrets:/run/secrets-env:ro
+      # SESSION_SECRET riêng, tự sinh 0600 trong 0700 và bền vững qua restart/recreate
+      - ops_hosted_ui_secrets:/run/client-secrets
     healthcheck:
       test:
         [
@@ -158,3 +163,4 @@ volumes:
   ops_backend_data:
   ops_backend_secrets:
   ops_frontend_secrets:
+  ops_hosted_ui_secrets:
