@@ -1,0 +1,64 @@
+# Caddyfile mẫu cho Ops VPS (Phase 4 / Proposal P4-C1) — Caddy cài trực tiếp trên host Ubuntu.
+# Sao chép thành /etc/caddy/Caddyfile và khai báo biến môi trường cho dịch vụ caddy (KHÔNG commit giá trị thật):
+#   OPS_DOMAIN=<domain>              -> phục vụ https://api.<domain> (Ops Backend) và https://app.<domain> (Hosted UI)
+#   OPS_ADMIN_EMAIL=<email>          -> email đăng ký Let's Encrypt
+# Yêu cầu đi kèm:
+#   - compose.ops.yaml bind backend/frontend vào 127.0.0.1 (mặc định của P4-C1); ufw/cloud firewall chỉ mở 22, 80, 443.
+#   - DNS api./app. ở chế độ DNS-only (không bật proxy Cloudflare, tránh giới hạn timeout 100s).
+#   - .env VPS: TRUST_PROXY_FORWARDED_FOR=true, TRUST_PROXY_HEADERS=true, ALLOWED_ORIGINS=https://app.<domain>
+#     (chỉ bật sau khi đã xác nhận cổng 8000/3000 không truy cập được từ Internet).
+# Không khai báo trusted_proxies: mọi X-Forwarded-* do client gửi lên đều bị bỏ qua và ghi đè bên dưới.
+# Kiểm tra cú pháp: OPS_DOMAIN=example.test OPS_ADMIN_EMAIL=ops@example.test caddy validate --config Caddyfile --adapter caddyfile
+
+{
+	email {$OPS_ADMIN_EMAIL}
+}
+
+api.{$OPS_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 64MB
+	}
+	reverse_proxy 127.0.0.1:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			dial_timeout 10s
+			read_timeout 150s
+			write_timeout 150s
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+app.{$OPS_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 64MB
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			dial_timeout 10s
+			read_timeout 150s
+			write_timeout 150s
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
