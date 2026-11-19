@@ -98,19 +98,55 @@ def _make_trade(
     )
 
 
+class _LazyBlockHashes(dict):
+    """Block hash map tính lười: tránh dựng sẵn ~61M entry khi set_head(>= Fuji deploy block).
+
+    Ngữ nghĩa giữ nguyên bản eager cũ: hash của block b lấy theo lần set_head() ĐẦU TIÊN phủ b
+    (sticky, giống `if b not in block_hashes`), giá trị gán tường minh luôn được ưu tiên.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._ranges: list[tuple[int, str]] = []
+
+    def add_range(self, upto: int, prefix: str) -> None:
+        self._ranges.append((upto, prefix))
+
+    def _lazy(self, b: Any) -> str | None:
+        if not isinstance(b, int):
+            return None
+        for upto, prefix in self._ranges:
+            if 0 <= b <= upto:
+                return f"{prefix}{b:062x}"
+        return None
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        v = self._lazy(key)
+        return default if v is None else v
+
+    def __contains__(self, key: object) -> bool:
+        return dict.__contains__(self, key) or self._lazy(key) is not None
+
+    def __getitem__(self, key: Any) -> str:
+        v = self.get(key)
+        if v is None:
+            raise KeyError(key)
+        return v
+
+
 class _MockEth:
     def __init__(self, logs_fn=None):
         self.latest_block = 0
-        self.block_hashes: dict[int, str] = {}
+        self.block_hashes: _LazyBlockHashes = _LazyBlockHashes()
         self.logs: list[dict[str, Any]] = []
         self._logs_fn = logs_fn
         self.get_logs_calls: list[dict[str, Any]] = []
 
     def set_head(self, blk: int, hash_prefix: str = "0xaa") -> None:
         self.latest_block = blk
-        for b in range(0, blk + 1):
-            if b not in self.block_hashes:
-                self.block_hashes[b] = f"{hash_prefix}{b:062x}"
+        self.block_hashes.add_range(blk, hash_prefix)
 
     def get_block(self, block_id: Any) -> dict[str, Any]:
         num = self.latest_block if block_id == "latest" else int(block_id)

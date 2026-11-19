@@ -73,7 +73,7 @@ Mọi nội dung trên slide, lời thoại video và trang nộp bài **bắt b
 - **Không hộp đen — 4 bước kiểm tra định lượng trên ảnh & video (tách keyframe):**
   1. **pHash Reuse Detection:** Kiểm tra trùng lặp với ảnh giao dịch cũ hoặc ảnh niêm yết bị dùng lại làm ảnh đóng gói (`Hamming distance <= 8`).
   2. **Nonce Verification:** Đọc mã **QR `TP1:`** chính xác trước; dự phòng **Tesseract OCR** cho mã 8-hex viết tay (`Levenshtein <= 1`).
-  3. **Object Identity Verification:** Kết hợp **CLIP** embedding (hoặc HSV histogram fallback) với **ORB + RANSAC homography** (`>= 15` good inliers).
+  3. **Object Identity Verification:** Kết hợp embedding màu **HSV histogram** (mặc định trong Docker; **CLIP** là tuỳ chọn khi cài thêm `open_clip_torch`) với **ORB + RANSAC homography** (`>= 15` good inliers).
   4. **Handcrafted Risk Formula (`0..100`):**
      $$\text{raw} = 0.4 \cdot \text{reputation\_term} + 0.4 \cdot \text{identity\_term} + 0.2 \cdot \text{value\_term}$$
      - Bất kỳ `hard_flag` nào (trùng pHash, thiếu/sai nonce Seller hoặc Buyer) đẩy `riskScore >= 80` và tự động gắn cờ (`flagged = true` khi `hard_flag` hoặc `riskScore >= 70`).
@@ -95,10 +95,10 @@ Mọi nội dung trên slide, lời thoại video và trang nộp bài **bắt b
   - **`/admin`:** Giao diện trọng tài cho Owner chọn 1 trong 3 phán quyết (`Phạt Seller vi phạm`, `Phạt Buyer vi phạm`, `Hoà giải / Không ai sai`).
 
 ### Slide 10 — Minh bạch Giới hạn & Kết quả Kiểm thử (Security & Quality)
-- **Kết quả kiểm thử trên commit `origin/main` (`f6b909a`):**
-  - **Smart Contract (`forge test`):** **80 passed, 0 failed, 0 skipped** (gồm 2 invariant `256 runs, 51,200 calls`).
-  - **Backend + AI Pipeline (`pytest -rs`):** **185 passed, 0 failed, 0 skipped** (gồm tích hợp Anvil thật).
-  - **Frontend (`npm test` / `tsc` / `build`):** **67 passed, 0 failed, 0 skipped**; `tsc --noEmit` và `next build` (27 routes) exit `0`.
+- **Kết quả kiểm thử (Local Demo release, 20/11/2026 — xem `docs/test-evidence/LOCAL-DEMO-QA-REPORT.md`):**
+  - **Smart Contract (`forge test`):** **81 passed, 0 failed, 0 skipped** (gồm invariant tests).
+  - **Backend + AI Pipeline (`pytest -rs`):** **223 passed, 0 failed, 0 skipped** (gồm tích hợp Anvil).
+  - **Frontend (`npm test` / `tsc` / `build`):** **101 passed, 0 failed, 0 skipped**; `tsc --noEmit` exit `0`; `next build` PASS trong Docker build.
   - *(Minh bạch tồn đọng: `npm run lint`/ESLint chưa cấu hình; `npm audit --omit=dev` còn 22 advisory gián tiếp yêu cầu nâng major Next 16/wagmi 3).*
 - **Giới hạn hiện tại được công bố thẳng thắn:**
   - Hợp đồng chỉ giữ **cọc 30%** (không thay thế thanh toán 100% giá trị hàng); trọng tài `Disputed` vẫn là **Owner EOA tập trung** và chưa có timeout thoát trạng thái `Disputed` nếu Owner vắng mặt; dữ liệu IPFS công khai vĩnh viễn; hệ thống hiện chạy thử nghiệm trên **Fuji Testnet (`43113`)**.
@@ -112,7 +112,7 @@ Mọi nội dung trên slide, lời thoại video và trang nộp bài **bắt b
   - Pitch Deck & Demo Video *(Bắt buộc)*: `[Điền link công khai mở được ẩn danh]`
   - Snowtrace Escrow (`43113`) *(Bắt buộc)*: `https://testnet.snowtrace.io/address/0x19D053c84941411888f5b9e40c854365fdd4eb00`
   - Snowtrace Token `CDU` (`43113`) *(Bắt buộc)*: `https://testnet.snowtrace.io/address/0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78`
-  - Live Fuji dApp *(OPTIONAL)*: `[Điền URL công khai nếu đã deploy, hoặc ghi rõ chạy demo local kết nối Fuji 43113]`
+  - Chạy thử: **Local Demo bằng Docker kết nối hợp đồng Fuji `43113` thật** (không có dApp public) — `docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md`
 
 ---
 
@@ -127,9 +127,9 @@ Mọi nội dung trên slide, lời thoại video và trang nộp bài **bắt b
 - **Ví cần chuẩn bị (4 địa chỉ tách biệt trên Avalanche Fuji `43113`):**
   1. **Seller Wallet:** Có `>= 0.25 AVAX` Fuji (khác ví Owner và Buyer).
   2. **Buyer Wallet:** Có `>= 0.25 AVAX` Fuji (khác ví Owner và Seller).
-  3. **Owner / Arbiter Wallet (`0xCa76...39Eb`):** Hiện có `~0.10 AVAX` — đủ ký `resolveDispute`, khuyến nghị nạp thêm từ faucet để dư gas dự phòng.
-  4. **AI Agent Wallet (`0x579e...7081`):** Hiện có `0.420000 AVAX`, chạy nền với `AGENT_AUTO=true` *(khuyến nghị nạp thêm `>= 0.1 AVAX` Faucet nếu cần đạt ngưỡng `>= 0.5 AVAX` trước khi quay demo)*.
-- **Dịch vụ đang bật:** Backend FastAPI kết nối Fuji (`ALLOW_LOCAL_HOSTS=false`, `ENFORCE_EVIDENCE_HASH=true`, `REQUIRE_PROXY_SIGNATURE=true`, nên cấu hình `IPFS_GATEWAY` dự phòng tránh 429) + Frontend Next.js.
+  3. **Owner / Arbiter Wallet (`0xCa76...39Eb`):** `0.55 AVAX` (đo on-chain 20/11/2026) — đủ ký `resolveDispute`.
+  4. **AI Agent Wallet (`0x579e...7081`):** `0.47 AVAX` (đo on-chain 20/11/2026), chạy nền với `AGENT_AUTO=true` *(nạp thêm từ faucet để đạt ngưỡng `>= 0.5 AVAX` trước khi quay)*.
+- **Dịch vụ đang bật:** `docker compose up -d` trên máy Owner với `.env` cục bộ (`PINATA_JWT`, `AGENT_PRIVATE_KEY` của ví Agent, `AGENT_AUTO=true`) — Backend FastAPI kết nối Fuji (`ALLOW_LOCAL_HOSTS=false`, `ENFORCE_EVIDENCE_HASH=true`, `REQUIRE_PROXY_SIGNATURE=true`, nên cấu hình `IPFS_GATEWAY` dự phòng tránh 429) + Frontend Next.js.
 - **Đạo cụ quay / ảnh kiểm thử:**
   - 1 món đồ sưu tầm thật (ví dụ mô hình/LEGO/figure) + 2–3 ảnh niêm yết rõ nét.
   - Kịch bản 1 (Sạch): Sau khi hai bên cọc xong, mở QR từ `NonceCard` trên màn hình phụ/điện thoại (hoặc viết rõ 8 ký tự hex bằng bút dạ đen lên giấy trắng) đặt cạnh món đồ thật để chụp ảnh Seller đóng gói và ảnh/video Buyer mở hộp.
@@ -142,9 +142,9 @@ Mọi nội dung trên slide, lời thoại video và trang nộp bài **bắt b
 | **0:00 – 0:20** | Slide 1–2 hoặc màn hình Marketplace `/` | Mở trang chủ `/`, lướt nhẹ danh mục sản phẩm sưu tầm | *"Giao dịch đồ sưu tầm P2P thường gãy ở hai điểm: bên mua sợ chuyển cọc xong mất hút, bên bán sợ tráo hàng rồi dùng ảnh mạng đòi bồi thường. Đây là **Escrow Marketplace** — sàn đồ sưu tầm kết hợp ký quỹ cọc 30% AVAX trên Avalanche Fuji và AI Agent xác thực bằng chứng trong khung hình."* |
 | **0:20 – 0:50** | `/sell` → `/listings/[id]` → `/sell?tab=requests` | 1. Seller đăng bán món đồ sưu tầm với 2 ảnh thật và giá (ví dụ `0.1 AVAX`).<br>2. Đổi sang trình duyệt Buyer mở `/listings/[id]`, chỉ vào box **30% AVAX & CDU**, bấm **`Gửi yêu cầu mua`** (hiện đồng hồ giữ chỗ 30 phút).<br>3. Seller vào `/sell?tab=requests`, bấm chấp nhận rồi bấm **`Tạo Escrow on-chain & Liên kết`** và ký EIP-191 xác nhận ảnh niêm yết (miễn phí gas). | *"Thay vì tạo contract tràn lan gây tốn gas, sàn vận hành danh mục và giữ chỗ 30 phút off-chain trên SQLite. Khi người bán đồng ý, hệ thống tạo Escrow trên Avalanche Fuji và người bán ký xác nhận chính chủ ảnh niêm yết bằng EIP-191 — đảm bảo AI sau này không thể bị lừa bằng ảnh tham chiếu giả."* |
 | **0:50 – 1:30** | `/trade/[id]` (2 cửa sổ Buyer & Seller cạnh nhau) | 1. Seller và Buyer lần lượt nạp đúng **30% AVAX** (`deposit`). *[Cắt gọn lúc chờ xác nhận tx]*. Hợp đồng chuyển `AwaitingEvidence` và mint token `CDU` 1:1.<br>2. Trỏ chuột vào **`NonceCard`** mới mở khóa (hiện mã **QR `TP1:`** và **8-hex**).<br>3. Cắt cảnh thực tế đặt điện thoại hiện QR cạnh hộp hàng / quay ảnh mở hộp, upload lên Pinata IPFS và bấm `submitEvidence` cho cả hai phía. | *"Cả hai bên cùng ký quỹ 30% AVAX theo cơ chế Đặt cọc bảo đảm (lấy cảm hứng từ BLDS 2015 Điều 328) — không giam 100% tiền hàng nhưng đủ tạo ràng buộc kinh tế hai chiều. Khi đủ cọc, thẻ `NonceCard` mở khóa mã QR `TP1:` do Smart Contract sinh gắn với đúng giao dịch này. Người bán chụp gói hàng cùng mã QR, người mua chụp lúc mở hộp và neo hash bằng chứng lên blockchain."* |
-| **1:30 – 1:55** | `/trade/[id]` (`AgentStatusCard`) → `/trade/[id]/report` → Snowtrace | 1. *[Cắt gọn lúc AI quét nền]* Thẻ **`AI Agent tự động`** chuyển trạng thái phân tích xong đúng kết quả thực tế (ví dụ `flagged = false`, `riskScore < 70`) và hiện hash tx `attest()`.<br>2. Bấm **`Xem Báo Cáo Giải Trình AI (Explainable Report)`**, bấm nút đối chiếu **`keccak256` Report on-chain** hiện khớp hoàn toàn + các điểm khớp ORB.<br>3. *[Cắt nhanh đoạn chờ hết `90s` `DISPUTE_WINDOW`]* Bấm **`Hoàn cọc hai bên (Resolve Clean)`** và xác nhận tx thật trên Fuji. | *"Ngay khi đủ hai bằng chứng, AI Agent chạy nền kiểm tra trùng lặp pHash, đọc mã QR nonce, so khớp vật thể bằng CLIP và ORB rồi chỉ gọi duy nhất hàm `attest()` để neo `reportHash` lên Fuji. AI không cầm tiền và không tự xử phạt. Nếu không ai khiếu nại sau cửa sổ tranh chấp, bất kỳ ai cũng có thể kích hoạt `Resolve Clean` để hoàn cọc hai bên và cộng `+1` uy tín."* |
+| **1:30 – 1:55** | `/trade/[id]` (`AgentStatusCard`) → `/trade/[id]/report` → Snowtrace | 1. *[Cắt gọn lúc AI quét nền]* Thẻ **`AI Agent tự động`** chuyển trạng thái phân tích xong đúng kết quả thực tế (ví dụ `flagged = false`, `riskScore < 70`) và hiện hash tx `attest()`.<br>2. Bấm **`Xem Báo Cáo Giải Trình AI (Explainable Report)`**, bấm nút đối chiếu **`keccak256` Report on-chain** hiện khớp hoàn toàn + các điểm khớp ORB.<br>3. *[Cắt nhanh đoạn chờ hết `90s` `DISPUTE_WINDOW`]* Bấm **`Hoàn cọc hai bên (Resolve Clean)`** và xác nhận tx thật trên Fuji. | *"Ngay khi đủ hai bằng chứng, AI Agent chạy nền kiểm tra trùng lặp pHash, đọc mã QR nonce, so khớp vật thể bằng embedding màu (HSV histogram; CLIP là tuỳ chọn) và ORB rồi chỉ gọi duy nhất hàm `attest()` để neo `reportHash` lên Fuji. AI không cầm tiền và không tự xử phạt. Nếu không ai khiếu nại sau cửa sổ tranh chấp, bất kỳ ai cũng có thể kích hoạt `Resolve Clean` để hoàn cọc hai bên và cộng `+1` uy tín."* |
 | **1:55 – 2:28** | `/trade/[id]` (Trade #GianLận) → `/admin` → Snowtrace | 1. Chuyển sang giao dịch thứ hai thực tế trên Fuji (đã nộp ảnh thiếu nonce / sai vật thể, cắt gọn bước nạp cọc) → `AgentStatusCard` hiện `riskScore >= 80`, `flagged = true`.<br>2. Bấm **`Mở khiếu nại tranh chấp (File Complaint)`**.<br>3. Chuyển sang ví Owner mở `/admin`, bấm **`Phạt Seller vi phạm`** (hoặc `Phạt Buyer vi phạm`), xác nhận tx `resolveDispute`.<br>4. Mở giao dịch thật trên **Snowtrace Fuji**, zoom vào sự kiện `ResolvedDispute` có `penaltyAmount > 0` (5% cọc) và điểm uy tín `-10` / `+5`. | *"Ngược lại, ở giao dịch gửi ảnh không có mã nonce hợp lệ, pipeline đẩy điểm rủi ro lên tối thiểu 80 và gắn cờ cảnh báo. Khi chuyển sang tranh chấp, trọng tài Owner vào `/admin` đối chiếu báo cáo AI và gọi `resolveDispute` phạt 5% tiền cọc bên vi phạm chuyển cho bên bị hại, đồng thời cập nhật uy tín `-10` và `+5` minh bạch trên Snowtrace."* |
-| **2:28 – 2:40** | Slide 11 / Màn hình tổng kết | Hiển thị kiến trúc tổng quan, số liệu **80 Foundry + 185 Python + 67 Frontend tests** và link GitHub / Fuji Contract. | *"Escrow Marketplace hoàn thiện full-stack trên Avalanche Fuji với 80 bài test Smart Contract, 185 test Backend/AI và 67 test Frontend. Toàn bộ mã nguồn và giao dịch on-chain đều được công khai để kiểm chứng. Cảm ơn Ban Giám Khảo!"* |
+| **2:28 – 2:40** | Slide 11 / Màn hình tổng kết | Hiển thị kiến trúc tổng quan, số liệu **81 Foundry + 223 Python + 101 Frontend tests** và link GitHub / Fuji Contract. | *"Escrow Marketplace hoàn thiện full-stack trên Avalanche Fuji với 81 bài test Smart Contract, 223 test Backend/AI và 101 test Frontend. Toàn bộ mã nguồn và giao dịch on-chain đều được công khai để kiểm chứng. Cảm ơn Ban Giám Khảo!"* |
 
 ---
 
