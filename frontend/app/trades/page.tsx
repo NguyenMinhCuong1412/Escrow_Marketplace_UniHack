@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -20,8 +20,12 @@ import {
 } from 'lucide-react';
 import {
   cancelPurchaseRequest,
+  createNonOverlappingPollController,
   getTradeMarketplaceContext,
+  isAbortError,
   listPurchaseRequests,
+  MarketplaceApiError,
+  POLL_MAX_BACKOFF_MS,
   syncMarketplaceTrade,
   weiToAvaxString,
   type PurchaseRequestDto,
@@ -33,8 +37,15 @@ import { formatDateTime, shortAddr } from '@/lib/format';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useMyTrades } from '@/hooks/useMyTrades';
 import { TradeList } from '@/components/TradeList';
+import type { TradeData } from '@/types/trade';
 
 type TradesTab = 'buyer' | 'seller' | 'escrow';
+
+const TRADES_POLL_INTERVAL_MS = 10_000;
+
+function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof MarketplaceApiError && err.status === 401;
+}
 
 function formatTtl(expiresAtSec: number | null, nowSec: number): string {
   if (!expiresAtSec) return '';
@@ -62,10 +73,27 @@ const MyTradesContent: React.FC = () => {
 
   const {
     address,
+    chain,
+    targetChain,
+    isAuthenticated,
     serverSessionActive,
     isSigningIn,
     authenticateWithServer,
+    syncServerSession,
   } = useAuthSession();
+
+  const effectiveChainId = chain?.id ?? targetChain?.id ?? 0;
+  const normalizedAddress = address ? address.toLowerCase() : '';
+  const isSessionReady = Boolean(
+    address &&
+      isAuthenticated &&
+      serverSessionActive &&
+      !isSigningIn
+  );
+  const currentSessionKey =
+    isSessionReady && normalizedAddress
+      ? `${normalizedAddress}::${effectiveChainId}`
+      : '';
 
   const {
     trades,
@@ -75,15 +103,78 @@ const MyTradesContent: React.FC = () => {
     refetch: refetchMyTrades,
   } = useMyTrades();
 
+  const [loadedSessionKey, setLoadedSessionKey] = useState('');
+  const [loadedContextKey, setLoadedContextKey] = useState('');
   const [buyerRequests, setBuyerRequests] = useState<PurchaseRequestDto[]>([]);
   const [sellerRequests, setSellerRequests] = useState<PurchaseRequestDto[]>([]);
-  const [isLoadingReqs, setIsLoadingReqs] = useState(true);
+  const [isLoadingReqs, setIsLoadingReqs] = useState(false);
   const [reqError, setReqError] = useState<string | null>(null);
+  const [transientPollError, setTransientPollError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [contextsByTradeId, setContextsByTradeId] = useState<
     Record<string, TradeContextDto>
   >({});
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+
+  // Synchronously scope all rendered data to the current wallet/chain/session (0 cross-wallet render frames)
+  const visibleTrades = useMemo(
+    () =>
+      isAuthenticated && normalizedAddress
+        ? (trades || []).filter(
+            (t) =>
+              t.seller.toLowerCase() === normalizedAddress ||
+              t.buyer.toLowerCase() === normalizedAddress
+          )
+        : [],
+    [trades, isAuthenticated, normalizedAddress]
+  );
+
+  const hasMatchingSessionData = Boolean(
+    isSessionReady &&
+      currentSessionKey !== '' &&
+      loadedSessionKey === currentSessionKey
+  );
+  const hasMatchingContextData = Boolean(
+    isSessionReady &&
+      currentSessionKey !== '' &&
+      loadedContextKey === currentSessionKey
+  );
+  const visibleBuyerRequests = hasMatchingSessionData ? buyerRequests : [];
+  const visibleSellerRequests = hasMatchingSessionData ? sellerRequests : [];
+  const visibleContextsByTradeId = hasMatchingContextData ? contextsByTradeId : {};
+  const visibleReqError = hasMatchingSessionData ? reqError : null;
+  const visibleTransientPollError = hasMatchingSessionData ? transientPollError : null;
+
+  const canPollTrades = Boolean(isSessionReady && busyId === null);
+
+  // Concurrency, polling & session isolation refs
+  const sessionEpochRef = useRef(0);
+  const sessionValidRef = useRef(false);
+  const currentSessionKeyRef = useRef(currentSessionKey);
+  currentSessionKeyRef.current = currentSessionKey;
+  const activeAddressRef = useRef<string | null>(normalizedAddress || null);
+  activeAddressRef.current = normalizedAddress || null;
+  const hasLoadedOnceRef = useRef(false);
+  const lastFetchSucceededRef = useRef(false);
+  const canPollTradesRef = useRef(canPollTrades);
+  canPollTradesRef.current = canPollTrades;
+  const prevCanPollTradesRef = useRef(canPollTrades);
+  const lastActiveSessionKeyRef = useRef('');
+  const lastHandledTradesSignatureRef = useRef('');
+  const pollControllerRef = useRef<ReturnType<typeof createNonOverlappingPollController> | null>(null);
+  const visibleTradesRef = useRef<TradeData[]>(visibleTrades);
+  visibleTradesRef.current = visibleTrades;
+  const refetchMyTradesRef = useRef(refetchMyTrades);
+  refetchMyTradesRef.current = refetchMyTrades;
+  const syncServerSessionRef = useRef(syncServerSession);
+  syncServerSessionRef.current = syncServerSession;
+
+  // Per-trade context fetch tracking
+  const contextsByTradeIdRef = useRef<Record<string, TradeContextDto>>({});
+  const perTradeCtxSeqRef = useRef<Map<string, number>>(new Map());
+  const perTradeCtxCommittedSeqRef = useRef<Map<string, number>>(new Map());
+  const activeContextAbortSetRef = useRef<Set<AbortController>>(new Set());
+  const nextCtxSeqRef = useRef(0);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -92,72 +183,395 @@ const MyTradesContent: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  const loadRequests = useCallback(async () => {
-    setIsLoadingReqs(true);
-    setReqError(null);
-    try {
-      const [buyerRes, sellerRes] = await Promise.all([
-        listPurchaseRequests({ role: 'buyer', limit: 50 }),
-        listPurchaseRequests({ role: 'seller', limit: 50 }),
-      ]);
-      setBuyerRequests(buyerRes.items || []);
-      setSellerRequests(sellerRes.items || []);
-    } catch (err) {
-      setReqError(
-        err instanceof Error
-          ? err.message
-          : 'Không thể tải danh sách yêu cầu mua/bán từ Marketplace.'
-      );
-    } finally {
-      setIsLoadingReqs(false);
+  const abortAllContextRequests = useCallback(() => {
+    for (const ac of activeContextAbortSetRef.current) {
+      ac.abort();
     }
+    activeContextAbortSetRef.current.clear();
+    perTradeCtxSeqRef.current.clear();
+    perTradeCtxCommittedSeqRef.current.clear();
   }, []);
 
-  useEffect(() => {
-    loadRequests();
-  }, [loadRequests, address]);
+  const clearSessionScopedState = useCallback(() => {
+    abortAllContextRequests();
+    hasLoadedOnceRef.current = false;
+    lastFetchSucceededRef.current = false;
+    lastHandledTradesSignatureRef.current = '';
+    contextsByTradeIdRef.current = {};
+    setLoadedSessionKey('');
+    setLoadedContextKey('');
+    setBuyerRequests((prev) => (prev.length === 0 ? prev : []));
+    setSellerRequests((prev) => (prev.length === 0 ? prev : []));
+    setContextsByTradeId((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setReqError(null);
+    setTransientPollError(null);
+    setIsLoadingReqs(false);
+    setBusyId(null);
+  }, [abortAllContextRequests]);
 
-  // Nạp metadata sản phẩm cho từng Escrow on-chain của user
-  useEffect(() => {
-    if (!trades || trades.length === 0) {
-      setContextsByTradeId({});
-      return;
+  const handleExpiredSession = useCallback(() => {
+    const hadSessionOrData =
+      sessionValidRef.current ||
+      hasLoadedOnceRef.current ||
+      currentSessionKeyRef.current !== '';
+    sessionValidRef.current = false;
+    sessionEpochRef.current += 1;
+    pollControllerRef.current?.dispose();
+    pollControllerRef.current = null;
+    clearSessionScopedState();
+    if (hadSessionOrData) {
+      syncServerSessionRef.current(false);
     }
-    let alive = true;
-    Promise.allSettled(
-      trades.map((t) =>
-        getTradeMarketplaceContext(t.id).then((ctx) => ({
-          id: t.id.toString(),
-          ctx,
-        }))
-      )
-    ).then((results) => {
-      if (!alive) return;
-      const map: Record<string, TradeContextDto> = {};
-      for (const res of results) {
-        if (res.status === 'fulfilled') {
-          map[res.value.id] = res.value.ctx;
+  }, [clearSessionScopedState]);
+
+  const refreshTradeContexts = useCallback(
+    async (
+      targetTrades: TradeData[],
+      opts?: { mode?: 'all' | 'active-or-missing'; signal?: AbortSignal }
+    ): Promise<void> => {
+      const mode = opts?.mode ?? 'active-or-missing';
+      const capturedEpoch = sessionEpochRef.current;
+      const capturedSessionKey = currentSessionKeyRef.current;
+      const capturedWallet = activeAddressRef.current;
+
+      if (!sessionValidRef.current || !capturedSessionKey || !capturedWallet) {
+        return;
+      }
+
+      const isSameSession = () =>
+        sessionValidRef.current &&
+        !opts?.signal?.aborted &&
+        capturedEpoch === sessionEpochRef.current &&
+        capturedSessionKey === currentSessionKeyRef.current &&
+        capturedWallet === activeAddressRef.current;
+
+      if (targetTrades.length === 0) {
+        if (isSameSession()) {
+          contextsByTradeIdRef.current = {};
+          setLoadedContextKey(capturedSessionKey);
+          setContextsByTradeId({});
+        }
+        return;
+      }
+
+      const activeIdSet = new Set(targetTrades.map((t) => t.id.toString()));
+      // Prune contexts for trades no longer in targetTrades without wiping active entries
+      setLoadedContextKey(capturedSessionKey);
+      const existingSnapshot = contextsByTradeIdRef.current;
+      let prunedNeeded = false;
+      const prunedMap: Record<string, TradeContextDto> = {};
+      for (const [k, v] of Object.entries(existingSnapshot)) {
+        if (activeIdSet.has(k)) {
+          prunedMap[k] = v;
+        } else {
+          prunedNeeded = true;
         }
       }
-      setContextsByTradeId(map);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [trades]);
+      if (prunedNeeded) {
+        contextsByTradeIdRef.current = prunedMap;
+        setContextsByTradeId((prev) => {
+          const next: Record<string, TradeContextDto> = {};
+          for (const [k, v] of Object.entries(prev)) {
+            if (activeIdSet.has(k)) next[k] = v;
+          }
+          return next;
+        });
+      }
 
-  const handleRefreshAll = async () => {
-    await Promise.all([loadRequests(), refetchMyTrades()]);
-    toast.success('Đã làm mới danh sách yêu cầu & giao dịch Escrow.');
-  };
+      const currentContexts = contextsByTradeIdRef.current;
+      const toFetch =
+        mode === 'all'
+          ? targetTrades
+          : targetTrades.filter((t) => {
+              const idStr = t.id.toString();
+              const existing = currentContexts[idStr];
+              return !existing || !existing.bound || t.state < 4;
+            });
+
+      if (toFetch.length === 0) {
+        return;
+      }
+
+      const entries = await Promise.allSettled(
+        toFetch.map(async (trade) => {
+          const idStr = trade.id.toString();
+          const tradeSeq = ++nextCtxSeqRef.current;
+          perTradeCtxSeqRef.current.set(idStr, tradeSeq);
+
+          const ac = new AbortController();
+          activeContextAbortSetRef.current.add(ac);
+
+          let onParentAbort: (() => void) | undefined;
+          if (opts?.signal) {
+            if (opts.signal.aborted) {
+              ac.abort();
+            } else {
+              onParentAbort = () => ac.abort();
+              opts.signal.addEventListener('abort', onParentAbort, { once: true });
+            }
+          }
+
+          try {
+            const ctx = await getTradeMarketplaceContext(trade.id, {
+              signal: ac.signal,
+            });
+            return { idStr, tradeSeq, ctx, signal: ac.signal };
+          } finally {
+            activeContextAbortSetRef.current.delete(ac);
+            if (opts?.signal && onParentAbort) {
+              opts.signal.removeEventListener('abort', onParentAbort);
+            }
+          }
+        })
+      );
+
+      if (!isSameSession()) {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (entry.status === 'rejected' && isUnauthorizedError(entry.reason)) {
+          handleExpiredSession();
+          return;
+        }
+      }
+
+      const winningUpdates: Record<string, TradeContextDto> = {};
+      let hasWinners = false;
+      for (const entry of entries) {
+        if (entry.status !== 'fulfilled') continue;
+        const { idStr, tradeSeq, ctx, signal } = entry.value;
+        if (signal.aborted) continue;
+        const committed = perTradeCtxCommittedSeqRef.current.get(idStr) ?? 0;
+        if (tradeSeq < committed) {
+          continue;
+        }
+        perTradeCtxCommittedSeqRef.current.set(idStr, tradeSeq);
+        winningUpdates[idStr] = ctx;
+        hasWinners = true;
+      }
+
+      setLoadedContextKey(capturedSessionKey);
+      if (hasWinners) {
+        contextsByTradeIdRef.current = {
+          ...contextsByTradeIdRef.current,
+          ...winningUpdates,
+        };
+        setContextsByTradeId((prev) => ({
+          ...prev,
+          ...winningUpdates,
+        }));
+      }
+    },
+    [handleExpiredSession]
+  );
+
+  const fetchTradesSnapshot = useCallback(
+    async (opts?: { silent?: boolean; signal?: AbortSignal }): Promise<boolean> => {
+      const silent = Boolean(opts?.silent);
+      const capturedEpoch = sessionEpochRef.current;
+      const capturedSessionKey = currentSessionKeyRef.current;
+      const capturedWallet = activeAddressRef.current;
+      lastFetchSucceededRef.current = false;
+
+      if (!sessionValidRef.current || !capturedSessionKey || !capturedWallet) {
+        if (!silent) setIsLoadingReqs(false);
+        return false;
+      }
+
+      const isSameActiveSession = () =>
+        sessionValidRef.current &&
+        !opts?.signal?.aborted &&
+        capturedEpoch === sessionEpochRef.current &&
+        capturedSessionKey === currentSessionKeyRef.current &&
+        capturedWallet === activeAddressRef.current;
+
+      if (!silent) {
+        if (!hasLoadedOnceRef.current) {
+          setIsLoadingReqs(true);
+        }
+        setReqError(null);
+        setTransientPollError(null);
+        void Promise.resolve(refetchMyTradesRef.current?.());
+      } else {
+        void Promise.resolve(refetchMyTradesRef.current?.());
+      }
+
+      try {
+        const currentTrades = visibleTradesRef.current;
+        lastHandledTradesSignatureRef.current = currentTrades
+          .map((t) => `${t.id.toString()}:${t.state}`)
+          .join(',');
+
+        const [buyerRes, sellerRes] = await Promise.all([
+          listPurchaseRequests({ role: 'buyer', limit: 50 }, { signal: opts?.signal }),
+          listPurchaseRequests({ role: 'seller', limit: 50 }, { signal: opts?.signal }),
+        ]);
+
+        if (!isSameActiveSession()) return false;
+
+        setLoadedSessionKey(capturedSessionKey);
+        setBuyerRequests(buyerRes.items || []);
+        setSellerRequests(sellerRes.items || []);
+        setReqError(null);
+        setTransientPollError(null);
+        hasLoadedOnceRef.current = true;
+
+        await refreshTradeContexts(visibleTradesRef.current, {
+          mode: silent ? 'active-or-missing' : 'all',
+          signal: opts?.signal,
+        });
+
+        if (!isSameActiveSession()) return false;
+        lastFetchSucceededRef.current = true;
+        return true;
+      } catch (err) {
+        if (isAbortError(err, opts?.signal) || !isSameActiveSession()) {
+          return false;
+        }
+        if (isUnauthorizedError(err)) {
+          handleExpiredSession();
+          return false;
+        }
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Không thể tải danh sách yêu cầu mua/bán từ Marketplace.';
+        if (silent && hasLoadedOnceRef.current) {
+          setTransientPollError(msg);
+          throw err;
+        }
+        setLoadedSessionKey(capturedSessionKey);
+        setReqError(msg);
+        if (silent) {
+          throw err;
+        }
+        return false;
+      } finally {
+        if (!silent && !opts?.signal?.aborted && capturedEpoch === sessionEpochRef.current) {
+          setIsLoadingReqs(false);
+        }
+      }
+    },
+    [handleExpiredSession, refreshTradeContexts]
+  );
+
+  // Session lifecycle & 10s non-overlapping poll controller
+  useEffect(() => {
+    if (!isSessionReady || !currentSessionKey) {
+      sessionValidRef.current = false;
+      sessionEpochRef.current += 1;
+      lastActiveSessionKeyRef.current = '';
+      prevCanPollTradesRef.current = false;
+      pollControllerRef.current?.dispose();
+      pollControllerRef.current = null;
+      clearSessionScopedState();
+      return;
+    }
+
+    if (lastActiveSessionKeyRef.current && lastActiveSessionKeyRef.current !== currentSessionKey) {
+      clearSessionScopedState();
+    }
+    lastActiveSessionKeyRef.current = currentSessionKey;
+    sessionEpochRef.current += 1;
+    sessionValidRef.current = true;
+    prevCanPollTradesRef.current = canPollTradesRef.current;
+
+    const controller = createNonOverlappingPollController({
+      baseIntervalMs: TRADES_POLL_INTERVAL_MS,
+      maxBackoffMs: POLL_MAX_BACKOFF_MS,
+      canPoll: () => canPollTradesRef.current && sessionValidRef.current,
+      runTask: async ({ signal, silent, isCurrent }) => {
+        if (!isCurrent() || !sessionValidRef.current) return;
+        await fetchTradesSnapshot({ silent, signal });
+      },
+    });
+
+    pollControllerRef.current = controller;
+    void controller.trigger({ silent: false });
+
+    const handleVisibilityChange = () => {
+      controller.onVisibilityOrStateChange();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      sessionValidRef.current = false;
+      sessionEpochRef.current += 1;
+      abortAllContextRequests();
+      controller.dispose();
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = null;
+      }
+    };
+  }, [
+    isSessionReady,
+    currentSessionKey,
+    abortAllContextRequests,
+    clearSessionScopedState,
+    fetchTradesSnapshot,
+  ]);
+
+  // Pause/resume cleanly on busyId / session readiness edge transitions
+  useEffect(() => {
+    const wasPollable = prevCanPollTradesRef.current;
+    prevCanPollTradesRef.current = canPollTrades;
+    if (wasPollable !== canPollTrades) {
+      pollControllerRef.current?.onVisibilityOrStateChange();
+    }
+  }, [canPollTrades]);
+
+  // Refresh metadata for newly appeared or updated on-chain trades
+  useEffect(() => {
+    if (!isSessionReady || !currentSessionKey || !sessionValidRef.current) {
+      return;
+    }
+    const sig = visibleTrades.map((t) => `${t.id.toString()}:${t.state}`).join(',');
+    if (sig === lastHandledTradesSignatureRef.current) {
+      return;
+    }
+    lastHandledTradesSignatureRef.current = sig;
+    void refreshTradeContexts(visibleTrades, { mode: 'active-or-missing' });
+  }, [isSessionReady, currentSessionKey, visibleTrades, refreshTradeContexts]);
+
+  const handleRefreshAll = useCallback(async () => {
+    if (!isSessionReady || !sessionValidRef.current) {
+      if (isAuthenticated) {
+        void Promise.resolve(refetchMyTrades());
+      }
+      return;
+    }
+    if (pollControllerRef.current) {
+      await pollControllerRef.current.trigger({ silent: false });
+    } else {
+      await fetchTradesSnapshot({ silent: false });
+    }
+    if (lastFetchSucceededRef.current && sessionValidRef.current) {
+      toast.success('Đã làm mới danh sách yêu cầu & giao dịch Escrow.');
+    }
+  }, [isSessionReady, isAuthenticated, refetchMyTrades, fetchTradesSnapshot]);
 
   const handleCancelBuyerRequest = async (req: PurchaseRequestDto) => {
+    const capturedEpoch = sessionEpochRef.current;
     setBusyId(req.id);
     try {
-      await cancelPurchaseRequest(req.id);
+      const cancelled = await cancelPurchaseRequest(req.id);
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.success('Đã hủy yêu cầu mua.');
-      await loadRequests();
+      setBuyerRequests((prev) =>
+        prev.map((item) => (item.id === cancelled.id ? cancelled : item))
+      );
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.error(err instanceof Error ? err.message : 'Không thể hủy yêu cầu mua.');
     } finally {
       setBusyId(null);
@@ -165,15 +579,37 @@ const MyTradesContent: React.FC = () => {
   };
 
   const handleSyncTrade = async (tradeId: number) => {
+    const capturedEpoch = sessionEpochRef.current;
     const key = `sync-${tradeId}`;
     setBusyId(key);
     try {
       const synced = await syncMarketplaceTrade(tradeId);
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.success(
         `Đã đồng bộ Escrow #${tradeId}: ${synced.synced_state || 'Đã cập nhật'}`
       );
-      await Promise.all([loadRequests(), refetchMyTrades()]);
+      setBuyerRequests((prev) =>
+        prev.map((item) =>
+          item.trade_id === tradeId
+            ? { ...item, synced_state: synced.synced_state ?? item.synced_state }
+            : item
+        )
+      );
+      setSellerRequests((prev) =>
+        prev.map((item) =>
+          item.trade_id === tradeId
+            ? { ...item, synced_state: synced.synced_state ?? item.synced_state }
+            : item
+        )
+      );
+      void Promise.resolve(refetchMyTrades());
+      void refreshTradeContexts(visibleTradesRef.current, { mode: 'all' });
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.error(err instanceof Error ? err.message : 'Đồng bộ thất bại.');
     } finally {
       setBusyId(null);
@@ -445,7 +881,7 @@ const MyTradesContent: React.FC = () => {
           }`}
         >
           <ShoppingBag className="w-4 h-4" aria-hidden="true" />
-          <span>Yêu cầu mua ({buyerRequests.length})</span>
+          <span>Yêu cầu mua ({visibleBuyerRequests.length})</span>
         </button>
 
         <button
@@ -460,7 +896,7 @@ const MyTradesContent: React.FC = () => {
           }`}
         >
           <Store className="w-4 h-4" aria-hidden="true" />
-          <span>Yêu cầu bán ({sellerRequests.length})</span>
+          <span>Yêu cầu bán ({visibleSellerRequests.length})</span>
         </button>
 
         <button
@@ -475,22 +911,22 @@ const MyTradesContent: React.FC = () => {
           }`}
         >
           <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-          <span>Giao dịch Escrow ({trades.length})</span>
+          <span>Giao dịch Escrow ({visibleTrades.length})</span>
         </button>
       </div>
 
-      {reqError && (activeTab === 'buyer' || activeTab === 'seller') && (
+      {visibleReqError && (activeTab === 'buyer' || activeTab === 'seller') && (
         <div
           role="alert"
           className="rounded-2xl border border-red-200 bg-red-50 p-4 flex items-center justify-between gap-3 text-xs sm:text-sm text-red-700"
         >
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>{reqError}</span>
+            <span>{visibleReqError}</span>
           </div>
           <button
             type="button"
-            onClick={loadRequests}
+            onClick={handleRefreshAll}
             className="px-3 py-1.5 rounded-xl bg-red-700 text-white text-xs font-semibold cursor-pointer"
           >
             Thử lại
@@ -498,8 +934,27 @@ const MyTradesContent: React.FC = () => {
         </div>
       )}
 
-      {activeTab === 'buyer' && renderRequestList(buyerRequests, 'buyer')}
-      {activeTab === 'seller' && renderRequestList(sellerRequests, 'seller')}
+      {!visibleReqError && visibleTransientPollError && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-2xl border border-[#F0B44D]/60 bg-[#F0B44D]/15 px-4 py-2.5 flex items-center justify-between gap-3 text-xs text-[#7A4B00]"
+        >
+          <span>
+            Tự động đồng bộ nền tạm gián đoạn ({visibleTransientPollError}). Dữ liệu hiện tại được giữ nguyên và sẽ tự thử lại.
+          </span>
+          <button
+            type="button"
+            onClick={handleRefreshAll}
+            className="px-2.5 py-1 rounded-lg border border-[#7A4B00]/30 bg-white/70 hover:bg-white text-[11px] font-semibold cursor-pointer shrink-0"
+          >
+            Thử ngay
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'buyer' && renderRequestList(visibleBuyerRequests, 'buyer')}
+      {activeTab === 'seller' && renderRequestList(visibleSellerRequests, 'seller')}
 
       {activeTab === 'escrow' && (
         <div className="space-y-4">
@@ -527,9 +982,9 @@ const MyTradesContent: React.FC = () => {
           )}
 
           <TradeList
-            trades={trades}
-            isLoading={isTradesLoading}
-            contextsByTradeId={contextsByTradeId}
+            trades={visibleTrades}
+            isLoading={Boolean(isAuthenticated && isTradesLoading)}
+            contextsByTradeId={visibleContextsByTradeId}
             emptyMessage="Bạn chưa tham gia giao dịch Escrow nào trên mạng hiện tại."
           />
         </div>
