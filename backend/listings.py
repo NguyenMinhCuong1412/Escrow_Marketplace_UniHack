@@ -1056,6 +1056,15 @@ class MarketplaceService:
             rep = reputation_lookup(row["seller_wallet"]) if reputation_lookup else None
             return self._listing_from_row(conn, row, seller_reputation=rep)
 
+    def get_listings_version(self) -> int:
+        """Trả version tăng đơn điệu mỗi khi listings/images/trades thay đổi (qua SQLite triggers)."""
+        return self.db.get_listings_version()
+
+    def has_expired_unbound_reservations(self, chain_id: int, escrow_address: str) -> bool:
+        """Kiểm tra có reservation quá hạn cần đối soát TTL trước khi trả cache ETag hay không."""
+        with self.db.read_conn() as conn:
+            return self._has_expired_unbound_reservations(conn, chain_id, escrow_address.lower(), self.clock())
+
     def _has_expired_unbound_reservations(
         self,
         conn: sqlite3.Connection,

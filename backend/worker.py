@@ -23,6 +23,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -107,7 +108,22 @@ class AgentWorker:
                     log.warning("Worker tick lỗi cấu hình/RPC (%s): %s", exc.status_code, exc.detail)
                 except Exception as exc:
                     log.warning("Worker tick lỗi: %s", exc)
-                self._stop.wait(self.settings.agent_poll_seconds)
+                poll_interval = max(0.25, float(self.settings.agent_poll_seconds))
+                deadline = time.monotonic() + poll_interval
+                while not self._stop.is_set():
+                    if self.runtime.db.has_pending_verify_jobs():
+                        try:
+                            self.runtime.agent.run_pending_verify_jobs(hold_lease=True)
+                        except InsecureConfigError as exc:
+                            log.error("Worker verify job bị chặn fail-closed (INSECURE_CONFIG): %s", ", ".join(exc.reasons))
+                        except HTTPException as exc:
+                            log.warning("Worker verify job lỗi (%s): %s", exc.status_code, exc.detail)
+                        except Exception as exc:
+                            log.warning("Worker verify job lỗi: %s", exc)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._stop.wait(min(0.25, remaining))
         finally:
             self.stop()
             log.info("Agent worker đã dừng (worker_id=%s)", self.runtime.agent.worker_id)

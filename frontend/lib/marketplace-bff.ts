@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createHmac, randomBytes } from 'crypto';
 import type { Address } from 'viem';
-import { verifySessionFromRequest } from '@/lib/auth-session';
+import { isSharedAuthBffMode, verifySessionFromRequest } from '@/lib/auth-session';
 
 /**
  * Server-only Marketplace BFF helpers.
@@ -46,8 +46,16 @@ export function bffError(
   });
 }
 
+export function isSharedBffMode(): boolean {
+  return isSharedAuthBffMode();
+}
+
 export function backendBaseUrl(): string {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
+  const url =
+    process.env.SHARED_API_URL ||
+    process.env.BACKEND_URL ||
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    'http://127.0.0.1:8000';
   return url.replace(/\/+$/, '');
 }
 
@@ -84,6 +92,42 @@ export function computeProxySignature(
 export interface SessionInfo {
   address: Address;
   chainId: number;
+  opsToken?: string;
+}
+
+/**
+ * Chọn chuẩn xác thực phù hợp từ BFF -> Backend:
+ * - Shared Auth mode (`SHARED_API_URL` hoặc `BFF_AUTH_MODE=shared`): dùng `Authorization: Bearer <opsToken>`.
+ * - Local / Dev mode: giữ nguyên `ATTEST_API_KEY` + HMAC `X-Auth-*` nội bộ.
+ */
+export function buildBackendRequestAuthHeaders(params: {
+  method: string;
+  upstreamPath: string;
+  session: SessionInfo;
+  idempotencyKey?: string;
+}): { ok: true; headers: Record<string, string> } | { ok: false; response: NextResponse } {
+  if (isSharedBffMode()) {
+    const opsToken = (params.session.opsToken || '').trim();
+    if (!opsToken) {
+      return {
+        ok: false,
+        response: bffError(
+          401,
+          'UNAUTHORIZED',
+          'Phiên đăng nhập chưa có Ops JWT hợp lệ. Vui lòng kết nối và ký lại ví.'
+        ),
+      };
+    }
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${opsToken}`,
+    };
+    if (params.idempotencyKey) {
+      headers['Idempotency-Key'] = params.idempotencyKey;
+    }
+    return { ok: true, headers };
+  }
+  return buildSignedProxyHeaders(params);
 }
 
 /**
@@ -369,6 +413,7 @@ async function executeBackendFetch(
     headers: Record<string, string>;
     query?: URLSearchParams;
     body?: Record<string, unknown>;
+    ifNoneMatch?: string | null;
   }
 ): Promise<NextResponse> {
   const qs = init.query && init.query.toString() ? `?${init.query.toString()}` : '';
@@ -379,6 +424,9 @@ async function executeBackendFetch(
 
   try {
     const fetchHeaders = { ...init.headers };
+    if (init.method === 'GET' && init.ifNoneMatch && init.ifNoneMatch.trim()) {
+      fetchHeaders['If-None-Match'] = init.ifNoneMatch.trim();
+    }
     let rawBody: string | undefined;
     if (init.body !== undefined && init.method !== 'GET') {
       fetchHeaders['Content-Type'] = 'application/json';
@@ -392,6 +440,19 @@ async function executeBackendFetch(
       signal: controller.signal,
       cache: 'no-store',
     });
+
+    const etag = res.headers.get('etag');
+    const cacheControl = res.headers.get('cache-control');
+    const vary = res.headers.get('vary');
+
+    if (res.status === 304) {
+      const notModHeaders: Record<string, string> = {
+        'Cache-Control': cacheControl || 'no-cache',
+      };
+      if (etag) notModHeaders['ETag'] = etag;
+      if (vary) notModHeaders['Vary'] = vary;
+      return new NextResponse(null, { status: 304, headers: notModHeaders });
+    }
 
     const text = await res.text();
     let parsed: unknown = null;
@@ -425,9 +486,15 @@ async function executeBackendFetch(
       return bffError(res.status, errorCode, message, details);
     }
 
+    const okHeaders: Record<string, string> = {
+      'Cache-Control': etag ? cacheControl || 'no-cache' : 'no-store',
+    };
+    if (etag) okHeaders['ETag'] = etag;
+    if (vary) okHeaders['Vary'] = vary;
+
     return NextResponse.json(parsed, {
       status: res.status,
-      headers: { 'Cache-Control': 'no-store' },
+      headers: okHeaders,
     });
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
@@ -453,8 +520,25 @@ export async function forwardPublicMarketplaceGet(
 ): Promise<NextResponse> {
   const session = verifySessionFromRequest(request);
   const clientIp = extractClientIpHeader(request);
+  const ifNoneMatch = request.headers.get('if-none-match');
 
   if (session) {
+    if (isSharedBffMode()) {
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (session.opsToken) {
+        headers['Authorization'] = `Bearer ${session.opsToken}`;
+      }
+      if (clientIp) {
+        headers['X-Forwarded-For'] = clientIp;
+      }
+      return executeBackendFetch(upstreamPath, {
+        method: 'GET',
+        headers,
+        query,
+        ifNoneMatch,
+      });
+    }
+
     const signed = buildSignedProxyHeaders({
       method: 'GET',
       upstreamPath,
@@ -469,6 +553,7 @@ export async function forwardPublicMarketplaceGet(
       method: 'GET',
       headers,
       query,
+      ifNoneMatch,
     });
   }
 
@@ -486,11 +571,12 @@ export async function forwardPublicMarketplaceGet(
     method: 'GET',
     headers,
     query,
+    ifNoneMatch,
   });
 }
 
 /**
- * Chuyển tiếp API Marketplace cần xác thực (`escrow_auth_session` + HMAC chống replay + CSRF cho ghi).
+ * Chuyển tiếp API Marketplace cần xác thực (`escrow_auth_session` + Ops JWT Bearer hoặc HMAC + CSRF cho ghi).
  */
 export async function forwardAuthenticatedMarketplaceRequest(
   request: Request,
@@ -537,7 +623,7 @@ export async function forwardAuthenticatedMarketplaceRequest(
     idemKey = idemCheck.key;
   }
 
-  const signed = buildSignedProxyHeaders({
+  const signed = buildBackendRequestAuthHeaders({
     method: opts.method,
     upstreamPath: opts.upstreamPath,
     session,
@@ -545,10 +631,16 @@ export async function forwardAuthenticatedMarketplaceRequest(
   });
   if (!signed.ok) return signed.response;
 
+  const clientIp = extractClientIpHeader(request);
+  const headers = { ...signed.headers };
+  if (clientIp) {
+    headers['X-Forwarded-For'] = clientIp;
+  }
+
   const query = opts.queryBuilder ? opts.queryBuilder(session) : opts.query;
   return executeBackendFetch(opts.upstreamPath, {
     method: opts.method,
-    headers: signed.headers,
+    headers,
     query,
     body,
   });

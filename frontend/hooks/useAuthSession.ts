@@ -251,38 +251,52 @@ function useAuthSessionController() {
         }
       }
 
-      // Step 2: Get one-time nonce from server
-      const getRes = await fetch('/api/auth/session', { cache: 'no-store' });
+      // Step 2: Get one-time nonce/challenge from server
+      const challengeUrl = `/api/auth/session?address=${encodeURIComponent(address)}&chainId=${activeChainId}`;
+      const getRes = await fetch(challengeUrl, { cache: 'no-store' });
       let getData = await getRes.json();
+      if (!getRes.ok) {
+        throw new Error(getData?.error || getData?.message || 'Không lấy được thử thách xác thực từ máy chủ.');
+      }
       if (getData?.authenticated && getData?.address?.toLowerCase() === address.toLowerCase()) {
         applySessionState(true, address);
         return true;
       }
       if (getData?.authenticated) {
         await fetch('/api/auth/session', { method: 'DELETE' }).catch(() => {});
-        const freshRes = await fetch('/api/auth/session', { cache: 'no-store' });
+        const freshRes = await fetch(challengeUrl, { cache: 'no-store' });
         getData = await freshRes.json();
+        if (!freshRes.ok) {
+          throw new Error(getData?.error || getData?.message || 'Không lấy được thử thách xác thực từ máy chủ.');
+        }
       }
       const nonce = getData?.nonce;
       if (!nonce) throw new Error('Không lấy được mã xác thực (nonce) từ máy chủ.');
 
       // Step 3: Request user signature for active account
-      const message = buildAuthChallengeMessage(address, nonce, activeChainId);
+      const message =
+        typeof getData?.message === 'string' && getData.message.length > 0
+          ? getData.message
+          : buildAuthChallengeMessage(address, nonce, activeChainId);
       const signature = await signMessageAsync({
         account: address,
         message,
       });
 
       // Step 4: Verify signature and set session cookie
+      const verifyPayload: Record<string, unknown> = {
+        address,
+        chainId: activeChainId,
+        nonce,
+        signature,
+      };
+      if (typeof getData?.challengeToken === 'string' && getData.challengeToken.length > 0) {
+        verifyPayload.challengeToken = getData.challengeToken;
+      }
       const postRes = await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          address,
-          chainId: activeChainId,
-          nonce,
-          signature,
-        }),
+        body: JSON.stringify(verifyPayload),
       });
 
       if (!postRes.ok) {

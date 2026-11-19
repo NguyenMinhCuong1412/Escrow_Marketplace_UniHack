@@ -100,7 +100,8 @@ export default function LocalWalletAuthPage() {
   ) => {
     let sessionReady = false;
     try {
-      const getRes = await fetch('/api/auth/session', { cache: 'no-store' });
+      const challengeUrl = `/api/auth/session?address=${encodeURIComponent(acc.address)}&chainId=${targetChain.id}`;
+      const getRes = await fetch(challengeUrl, { cache: 'no-store' });
       let getData = await getRes.json();
 
       if (getData?.authenticated && getData?.address?.toLowerCase() === acc.address.toLowerCase()) {
@@ -109,23 +110,30 @@ export default function LocalWalletAuthPage() {
       } else {
         if (getData?.authenticated) {
           await fetch('/api/auth/session', { method: 'DELETE' }).catch(() => {});
-          const freshRes = await fetch('/api/auth/session', { cache: 'no-store' });
+          const freshRes = await fetch(challengeUrl, { cache: 'no-store' });
           getData = await freshRes.json();
         }
 
         const nonce = getData?.nonce;
         if (nonce) {
-          const message = buildAuthChallengeMessage(acc.address, nonce, targetChain.id);
+          const message =
+            typeof getData?.message === 'string' && getData.message.length > 0
+              ? getData.message
+              : buildAuthChallengeMessage(acc.address, nonce, targetChain.id);
           const signature = await acc.signMessage({ message });
+          const verifyPayload: Record<string, unknown> = {
+            address: acc.address,
+            chainId: targetChain.id,
+            nonce,
+            signature,
+          };
+          if (typeof getData?.challengeToken === 'string' && getData.challengeToken.length > 0) {
+            verifyPayload.challengeToken = getData.challengeToken;
+          }
           const postRes = await fetch('/api/auth/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              address: acc.address,
-              chainId: targetChain.id,
-              nonce,
-              signature,
-            }),
+            body: JSON.stringify(verifyPayload),
           });
           if (postRes.ok) {
             syncServerSession(true, acc.address);

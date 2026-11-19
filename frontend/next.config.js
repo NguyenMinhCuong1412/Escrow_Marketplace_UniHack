@@ -6,7 +6,7 @@ const nextConfig = {
     if (process.env.NEXT_PUBLIC_BACKEND_URL !== '/_backend') {
       return [];
     }
-    const backend = (process.env.BACKEND_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+    const backend = (process.env.SHARED_API_URL || process.env.BACKEND_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
     return [
       { source: '/_backend/health', destination: `${backend}/health` },
       { source: '/_backend/report/:id(\\d+)', destination: `${backend}/report/:id` },

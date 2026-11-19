@@ -221,6 +221,88 @@ CREATE TABLE IF NOT EXISTS storage_migrations (
     items_imported INTEGER NOT NULL DEFAULT 0,
     details_json TEXT NOT NULL DEFAULT '{}'
 );
+
+-- ---------------------------------------------------------------------------
+-- Shared Auth, Pinata Relay Quota, Manual Verify Queue & Cache Version (Phase 2)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS used_auth_nonces (
+    nonce TEXT PRIMARY KEY,
+    wallet TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_nonces_expires
+ON used_auth_nonces (expires_at);
+
+CREATE TABLE IF NOT EXISTS pin_quota_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet TEXT NOT NULL,
+    client_ip TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pin_quota_wallet
+ON pin_quota_events (wallet, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_pin_quota_ip
+ON pin_quota_events (client_ip, created_at);
+
+CREATE TABLE IF NOT EXISTS verify_jobs (
+    trade_id INTEGER PRIMARY KEY,
+    requested_by TEXT NOT NULL DEFAULT '',
+    listing_image_url TEXT NOT NULL,
+    seller_evidence_url TEXT NOT NULL,
+    buyer_evidence_url TEXT NOT NULL,
+    include_visual INTEGER NOT NULL DEFAULT 1 CHECK (include_visual IN (0, 1)),
+    status TEXT NOT NULL CHECK (status IN ('PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED')),
+    error_status INTEGER,
+    error_detail TEXT NOT NULL DEFAULT '',
+    response_json TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_verify_jobs_pending
+ON verify_jobs (status, created_at ASC)
+WHERE status IN ('PENDING', 'PROCESSING');
+
+CREATE TABLE IF NOT EXISTS marketplace_state_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    listings_version INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT OR IGNORE INTO marketplace_state_meta (id, listings_version) VALUES (1, 1);
+
+CREATE TRIGGER IF NOT EXISTS trg_listings_rev_ins AFTER INSERT ON listings BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_listings_rev_upd AFTER UPDATE ON listings BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_listings_rev_del AFTER DELETE ON listings BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_listing_images_rev_ins AFTER INSERT ON listing_images BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_listing_images_rev_del AFTER DELETE ON listing_images BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_listing_trades_rev_ins AFTER INSERT ON listing_trades BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_listing_trades_rev_upd AFTER UPDATE ON listing_trades BEGIN
+    UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
+END;
 """
 
 
@@ -794,3 +876,245 @@ class MarketplaceDB:
             }
             for r in rows
         }
+
+    # -- Shared EIP-191 Auth Single-Use Nonces (used_auth_nonces) ----------
+
+    def consume_auth_nonce(
+        self,
+        nonce: str,
+        wallet: str,
+        domain: str,
+        expires_at: int,
+        now: Optional[int] = None,
+    ) -> bool:
+        """Ghi nhận challenge nonce dùng một lần theo BEGIN IMMEDIATE. Trả False nếu đã dùng."""
+        ts = int(time.time()) if now is None else int(now)
+        with self.write_tx() as conn:
+            conn.execute("DELETE FROM used_auth_nonces WHERE expires_at <= ?", (ts,))
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO used_auth_nonces (nonce, wallet, domain, expires_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (str(nonce), str(wallet).lower(), str(domain), int(expires_at)),
+                )
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    # -- Pinata Upload Quota (pin_quota_events) ----------------------------
+
+    def check_and_reserve_pin_quota(
+        self,
+        wallet: str,
+        client_ip: str,
+        size_bytes: int,
+        *,
+        now: Optional[int] = None,
+        window_seconds: int = 3600,
+        max_wallet_files: int = 20,
+        max_wallet_bytes: int = 150 * 1024 * 1024,
+        max_ip_files: int = 40,
+        max_ip_bytes: int = 300 * 1024 * 1024,
+    ) -> tuple[bool, Optional[str]]:
+        """Kiểm tra & ghi nhận quota theo ví + IP nguyên tử dưới BEGIN IMMEDIATE."""
+        ts = int(time.time()) if now is None else int(now)
+        cutoff = ts - max(int(window_seconds), 1)
+        w_norm = str(wallet).lower()
+        ip_norm = str(client_ip or "127.0.0.1")
+        sz = int(size_bytes)
+
+        with self.write_tx() as conn:
+            conn.execute("DELETE FROM pin_quota_events WHERE created_at <= ?", (cutoff,))
+
+            w_row = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS total_bytes
+                FROM pin_quota_events
+                WHERE wallet = ? AND created_at > ?
+                """,
+                (w_norm, cutoff),
+            ).fetchone()
+            w_cnt = int(w_row["cnt"])
+            w_bytes = int(w_row["total_bytes"])
+            if w_cnt + 1 > max_wallet_files or w_bytes + sz > max_wallet_bytes:
+                return False, "wallet"
+
+            ip_row = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS total_bytes
+                FROM pin_quota_events
+                WHERE client_ip = ? AND created_at > ?
+                """,
+                (ip_norm, cutoff),
+            ).fetchone()
+            ip_cnt = int(ip_row["cnt"])
+            ip_bytes = int(ip_row["total_bytes"])
+            if ip_cnt + 1 > max_ip_files or ip_bytes + sz > max_ip_bytes:
+                return False, "ip"
+
+            conn.execute(
+                """
+                INSERT INTO pin_quota_events (wallet, client_ip, size_bytes, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (w_norm, ip_norm, sz, ts),
+            )
+            return True, None
+
+    # -- Manual Verify Delegation Queue (verify_jobs) -----------------------
+
+    def enqueue_verify_job(
+        self,
+        trade_id: int,
+        requested_by: str,
+        listing_image_url: str,
+        seller_evidence_url: str,
+        buyer_evidence_url: str,
+        *,
+        include_visual: bool = True,
+        cooldown_seconds: float = 30.0,
+        processing_ttl_seconds: float = 300.0,
+        now: Optional[float] = None,
+    ) -> str:
+        """Đưa yêu cầu Verify thủ công vào hàng đợi SQLite WAL dùng chung với worker.
+        Trả 'queued', 'busy' (409 trùng đang xử lý), hoặc 'cooldown' (429 gọi dồn dập)."""
+        ts = time.time() if now is None else float(now)
+        tid = int(trade_id)
+        with self.write_tx() as conn:
+            existing = conn.execute(
+                "SELECT * FROM verify_jobs WHERE trade_id = ?",
+                (tid,),
+            ).fetchone()
+            if existing is not None:
+                st = str(existing["status"])
+                updated_at = float(existing["updated_at"])
+                if st in ("PENDING", "PROCESSING") and (ts - updated_at) < max(processing_ttl_seconds, 1.0):
+                    return "busy"
+                if st == "SUCCEEDED" and existing["response_json"]:
+                    return "already_done"
+                if cooldown_seconds > 0 and (ts - updated_at) < cooldown_seconds:
+                    return "cooldown"
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO verify_jobs (
+                    trade_id, requested_by, listing_image_url, seller_evidence_url,
+                    buyer_evidence_url, include_visual, status, error_status, error_detail,
+                    response_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', NULL, '', NULL, ?, ?)
+                """,
+                (
+                    tid,
+                    str(requested_by).lower(),
+                    listing_image_url,
+                    seller_evidence_url,
+                    buyer_evidence_url,
+                    1 if include_visual else 0,
+                    ts,
+                    ts,
+                ),
+            )
+            return "queued"
+
+    def claim_next_verify_job(
+        self,
+        *,
+        stale_processing_seconds: float = 300.0,
+        now: Optional[float] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Worker giành nguyên tử một job PENDING (hoặc PROCESSING bị treo quá TTL)."""
+        ts = time.time() if now is None else float(now)
+        stale_cutoff = ts - max(float(stale_processing_seconds), 10.0)
+        with self.write_tx() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM verify_jobs
+                WHERE status = 'PENDING'
+                   OR (status = 'PROCESSING' AND updated_at <= ?)
+                ORDER BY created_at ASC, trade_id ASC
+                LIMIT 1
+                """,
+                (stale_cutoff,),
+            ).fetchone()
+            if not row:
+                return None
+            tid = int(row["trade_id"])
+            conn.execute(
+                "UPDATE verify_jobs SET status = 'PROCESSING', updated_at = ? WHERE trade_id = ?",
+                (ts, tid),
+            )
+        return {
+            "trade_id": tid,
+            "requested_by": str(row["requested_by"]),
+            "listing_image_url": str(row["listing_image_url"]),
+            "seller_evidence_url": str(row["seller_evidence_url"]),
+            "buyer_evidence_url": str(row["buyer_evidence_url"]),
+            "include_visual": bool(row["include_visual"]),
+        }
+
+    def complete_verify_job(
+        self,
+        trade_id: int,
+        *,
+        succeeded: bool,
+        response_payload: Optional[dict[str, Any]] = None,
+        error_status: Optional[int] = None,
+        error_detail: str = "",
+        now: Optional[float] = None,
+    ) -> None:
+        ts = time.time() if now is None else float(now)
+        tid = int(trade_id)
+        status = "SUCCEEDED" if succeeded else "FAILED"
+        resp_json = json.dumps(response_payload, ensure_ascii=False) if response_payload is not None else None
+        with self.write_tx() as conn:
+            conn.execute(
+                """
+                UPDATE verify_jobs
+                SET status = ?, error_status = ?, error_detail = ?, response_json = ?, updated_at = ?
+                WHERE trade_id = ?
+                """,
+                (status, error_status, str(error_detail or ""), resp_json, ts, tid),
+            )
+
+    def get_verify_job(self, trade_id: int) -> Optional[dict[str, Any]]:
+        with self.read_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM verify_jobs WHERE trade_id = ?",
+                (int(trade_id),),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "trade_id": int(row["trade_id"]),
+            "requested_by": str(row["requested_by"]),
+            "listing_image_url": str(row["listing_image_url"]),
+            "seller_evidence_url": str(row["seller_evidence_url"]),
+            "buyer_evidence_url": str(row["buyer_evidence_url"]),
+            "include_visual": bool(row["include_visual"]),
+            "status": str(row["status"]),
+            "error_status": int(row["error_status"]) if row["error_status"] is not None else None,
+            "error_detail": str(row["error_detail"] or ""),
+            "response": json.loads(row["response_json"]) if row["response_json"] else None,
+            "created_at": float(row["created_at"]),
+            "updated_at": float(row["updated_at"]),
+        }
+
+    def has_pending_verify_jobs(self) -> bool:
+        with self.read_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM verify_jobs WHERE status = 'PENDING' LIMIT 1"
+            ).fetchone()
+        return row is not None
+
+    # -- Marketplace Listings Revision (ETag / 304 Coherency) --------------
+
+    def get_listings_version(self) -> int:
+        with self.read_conn() as conn:
+            row = conn.execute(
+                "SELECT listings_version FROM marketplace_state_meta WHERE id = 1"
+            ).fetchone()
+        return int(row["listings_version"]) if row else 1

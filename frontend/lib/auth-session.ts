@@ -24,6 +24,26 @@ function getConfiguredChainId(): number {
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
+export function isSharedAuthBffMode(): boolean {
+  const sharedUrl = (process.env.SHARED_API_URL || '').trim();
+  const mode = (process.env.BFF_AUTH_MODE || '').trim().toLowerCase();
+  return Boolean(sharedUrl || mode === 'shared');
+}
+
+function isOpsJwtExpired(opsToken: string): boolean {
+  const parts = opsToken.split('.');
+  if (parts.length !== 3) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { exp?: unknown };
+    if (typeof payload.exp === 'number' && Number.isFinite(payload.exp)) {
+      return payload.exp <= Math.floor(Date.now() / 1000);
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 /**
  * Resolves the HMAC secret used to sign/verify `escrow_auth_session`.
  * - Requires `SESSION_SECRET` independently; never falls back to `ATTEST_API_KEY`.
@@ -61,7 +81,7 @@ export function getSecretKey(targetChainId?: number): string {
     return sessionSecret;
   }
 
-  if (isLocalAnvilOnly) {
+  if (isLocalAnvilOnly || isSharedAuthBffMode()) {
     if (!localDevEphemeralSecret) {
       localDevEphemeralSecret = randomBytes(32).toString('hex');
     }
@@ -76,15 +96,24 @@ export function getSecretKey(targetChainId?: number): string {
 /**
  * Creates an authenticated HMAC session token.
  */
-export function createSessionToken(address: Address, chainId: number): string {
+export function createSessionToken(address: Address, chainId: number, opsToken?: string): string {
   const secret = getSecretKey(chainId);
   const now = Date.now();
-  const payload = {
+  const payload: {
+    address: Address;
+    chainId: number;
+    iat: number;
+    exp: number;
+    opsToken?: string;
+  } = {
     address: getAddress(address),
     chainId,
     iat: now,
     exp: now + SESSION_EXPIRY_MS,
   };
+  if (typeof opsToken === 'string' && opsToken.trim()) {
+    payload.opsToken = opsToken.trim();
+  }
   const payloadStr = JSON.stringify(payload);
   const payloadB64 = Buffer.from(payloadStr).toString('base64url');
   const hmac = createHmac('sha256', secret).update(payloadB64).digest('base64url');
@@ -94,7 +123,9 @@ export function createSessionToken(address: Address, chainId: number): string {
 /**
  * Verifies and decodes a session token.
  */
-export function verifySessionToken(token: string): { address: Address; chainId: number } | null {
+export function verifySessionToken(
+  token: string
+): { address: Address; chainId: number; opsToken?: string } | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 2) return null;
@@ -111,9 +142,18 @@ export function verifySessionToken(token: string): { address: Address; chainId: 
     const b = Buffer.from(expectedHmac, 'utf8');
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
+    const opsToken =
+      typeof payload.opsToken === 'string' && payload.opsToken.trim()
+        ? payload.opsToken.trim()
+        : undefined;
+    if (opsToken && isOpsJwtExpired(opsToken)) {
+      return null;
+    }
+
     return {
       address: getAddress(payload.address),
       chainId: payload.chainId,
+      ...(opsToken ? { opsToken } : {}),
     };
   } catch {
     return null;
@@ -124,10 +164,18 @@ export function verifySessionToken(token: string): { address: Address; chainId: 
  * Extracts and verifies the session token from a Next.js Request object.
  * Returns decoded session or null if unauthenticated.
  */
-export function verifySessionFromRequest(request: Request): { address: Address; chainId: number } | null {
+export function verifySessionFromRequest(
+  request: Request
+): { address: Address; chainId: number; opsToken?: string } | null {
   const cookieHeader = request.headers.get('cookie') || '';
   const match = cookieHeader.match(new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`));
-  const token = match ? match[1] : null;
-  if (!token) return null;
+  const rawToken = match ? match[1] : null;
+  if (!rawToken) return null;
+  let token = rawToken;
+  try {
+    token = decodeURIComponent(rawToken);
+  } catch {
+    token = rawToken;
+  }
   return verifySessionToken(token);
 }
