@@ -20,15 +20,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import socket
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from chain import EscrowClient, Trade, TradeState
+
+if TYPE_CHECKING:
+    from db import MarketplaceDB
 
 log = logging.getLogger("attest.agent")
 
@@ -41,23 +47,31 @@ class UriConflict(Exception):
 
 
 class UriRegistry:
-    """{trade_id: {role: uri}} lưu file JSON để sống qua restart. First-write-wins."""
+    """{trade_id: {role: uri}} — ưu tiên SQLite WAL dùng chung, fallback JSON khi db=None. First-write-wins."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, db: Optional["MarketplaceDB"] = None):
         self.path = path
+        self._db = db
         self._lock = threading.Lock()
         self._items: dict[str, dict[str, str]] = {}
-        if path.exists():
+        if self._db is None and path.exists():
             try:
                 self._items = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 log.warning("trade_uris.json hỏng, bắt đầu sổ rỗng")
 
     def get(self, trade_id: int) -> dict[str, str]:
+        if self._db is not None:
+            return self._db.get_trade_uris(trade_id)
         with self._lock:
             return dict(self._items.get(str(trade_id), {}))
 
     def set(self, trade_id: int, role: str, uri: str) -> None:
+        if self._db is not None:
+            ok, _ = self._db.set_trade_uri(trade_id, role, uri)
+            if not ok:
+                raise UriConflict(f"Trade {trade_id} đã có URI {role} khác")
+            return
         with self._lock:
             row = self._items.setdefault(str(trade_id), {})
             if row.get(role) == uri:
@@ -94,18 +108,41 @@ class AutoAgent:
     # Lỗi thường gặp là tạm thời (IPFS gateway 429, RPC rớt). Tổng thời gian thử lại ~4 phút,
     # nằm gọn trong ATTEST_WINDOW; hết lượt thì dừng và để người dùng chạy thủ công.
 
-    def __init__(self, get_client: Callable[[], EscrowClient], registry: UriRegistry,
-                 verify: Callable[[int, dict[str, str]], object], poll_seconds: float = 5.0,
-                 reconcile: Optional[Callable[[], None]] = None):
+    def __init__(
+        self,
+        get_client: Callable[[], EscrowClient],
+        registry: UriRegistry,
+        verify: Callable[[int, dict[str, str]], object],
+        poll_seconds: float = 5.0,
+        reconcile: Optional[Callable[[], None]] = None,
+        *,
+        db: Optional["MarketplaceDB"] = None,
+        worker_id: Optional[str] = None,
+        use_leader_lease: bool = True,
+        lease_name: str = "auto_agent_leader",
+        lease_ttl_seconds: float = 60.0,
+        reconcile_interval_seconds: float = 0.0,
+        clock: Callable[[], float] = time.time,
+    ):
         self._get_client = get_client
         self._registry = registry
         self._verify = verify
         self._reconcile = reconcile
+        self._db = db
+        self._clock = clock
+        self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._use_leader_lease = bool(use_leader_lease and db is not None)
+        self._lease_name = lease_name
+        self._lease_ttl_seconds = max(float(lease_ttl_seconds), 1.0)
+        self._reconcile_interval_seconds = max(float(reconcile_interval_seconds), 0.0)
+        self._last_reconcile_at: Optional[float] = None
         self.poll_seconds = poll_seconds
         self.status: dict[int, dict] = {}
         self.last_tick: Optional[float] = None
         self.last_error: Optional[str] = None
         self.last_reconcile_error: Optional[str] = None
+        self.is_leader: bool = False
+        self._tick_error_occurred: bool = False
         self._cursor = 1            # mọi trade id < cursor đều đã ở trạng thái kết thúc
         self._done: set[int] = set()
         self._stop = threading.Event()
@@ -120,59 +157,167 @@ class AutoAgent:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="auto-agent", daemon=True)
         self._thread.start()
-        log.info("Auto agent bật, quét mỗi %.1fs", self.poll_seconds)
+        log.info("Auto agent bật (worker_id=%s), quét mỗi %.1fs", self.worker_id, self.poll_seconds)
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5)
+        self.release_leadership()
+
+    def release_leadership(self) -> None:
+        if self._db is not None:
+            try:
+                self._db.release_worker_lease(self._lease_name, self.worker_id)
+            except Exception:
+                pass
+            try:
+                self._db.mark_agent_runtime_stopped(self.worker_id, heartbeat_at=self._clock())
+            except Exception:
+                pass
+        self.is_leader = False
 
     @property
     def running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
+    def _collect_client_telemetry(self, c: Optional[EscrowClient]) -> dict:
+        out: dict = {}
+        if c is None:
+            return out
+        addr = getattr(c, "agent_address", None)
+        if addr:
+            out["agent_address"] = str(addr)
+        try:
+            if hasattr(c, "agent_balance") and callable(c.agent_balance) and addr:
+                out["agent_balance_wei"] = str(c.agent_balance())
+        except Exception:
+            pass
+        try:
+            if hasattr(c, "onchain_agent") and callable(c.onchain_agent) and addr:
+                out["agent_matches_contract"] = str(c.onchain_agent()).lower() == str(addr).lower()
+        except Exception:
+            pass
+        return out
+
+    def _persist_runtime(self, *, running: bool, client: Optional[EscrowClient] = None) -> None:
+        if self._db is None:
+            return
+        telemetry = self._collect_client_telemetry(client)
+        try:
+            self._db.update_agent_runtime_meta(
+                self.worker_id,
+                running=running,
+                last_tick=self.last_tick,
+                last_error=self.last_error,
+                last_reconcile_error=self.last_reconcile_error,
+                agent_address=telemetry.get("agent_address"),
+                agent_balance_wei=telemetry.get("agent_balance_wei"),
+                agent_matches_contract=telemetry.get("agent_matches_contract"),
+                heartbeat_at=self._clock(),
+            )
+        except Exception as exc:
+            log.warning("Không cập nhật được agent_runtime_meta: %s", exc)
+
     def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self.tick()
-                self.last_error = None
-            except Exception as e:  # RPC rớt, thiếu cấu hình... → thử lại nhịp sau
-                self.last_error = str(getattr(e, "detail", e))
-                log.warning("auto agent tick lỗi: %s", self.last_error)
-            self._stop.wait(self.poll_seconds)
+        try:
+            while not self._stop.is_set():
+                try:
+                    self.tick(hold_lease=True)
+                except Exception as e:  # RPC rớt, thiếu cấu hình... → thử lại nhịp sau
+                    self.last_error = str(getattr(e, "detail", e))
+                    log.warning("auto agent tick lỗi: %s", self.last_error)
+                self._stop.wait(self.poll_seconds)
+        finally:
+            self.release_leadership()
 
     # -- một nhịp quét ----------------------------------------------------
 
-    def tick(self) -> None:
+    def tick(self, *, hold_lease: bool = False) -> bool:
         with self._tick_lock:
-            # 1. Đối soát marketplace chỉ đọc (TTL + đồng bộ trạng thái DB), tách biệt hoàn toàn khỏi AI attest.
-            if self._reconcile is not None:
-                try:
-                    self._reconcile()
-                    self.last_reconcile_error = None
-                except Exception as e:
-                    self.last_reconcile_error = str(getattr(e, "detail", e))
-                    log.warning("marketplace reconcile lỗi: %s", self.last_reconcile_error)
+            now = self._clock()
+            if self._use_leader_lease and self._db is not None:
+                acquired = self._db.acquire_worker_lease(
+                    self._lease_name, self.worker_id, self._lease_ttl_seconds, now=now
+                )
+                if not acquired:
+                    if self.is_leader:
+                        log.info("worker %s nhường leader lease %s cho worker khác", self.worker_id, self._lease_name)
+                    self.is_leader = False
+                    return False
+                if not self.is_leader:
+                    log.info("worker %s đang giữ leader lease %s", self.worker_id, self._lease_name)
+                self.is_leader = True
 
-            # 2. Quét AI attest tự động như hiện hữu.
-            c = self._get_client()
-            next_id = c.next_trade_id()
-            for tid in range(self._cursor, next_id):
-                if tid in self._done:
-                    continue
-                self._process(c, tid)
-            while self._cursor in self._done:
-                self._done.discard(self._cursor)
-                self._cursor += 1
-            self.last_tick = time.time()
+            self._tick_error_occurred = False
+            active_client: Optional[EscrowClient] = None
+            try:
+                # 1. Đối soát marketplace chỉ đọc (TTL + đồng bộ trạng thái DB), tách biệt hoàn toàn khỏi AI attest.
+                should_reconcile = self._reconcile is not None and (
+                    self._last_reconcile_at is None
+                    or (self._clock() - self._last_reconcile_at) >= self._reconcile_interval_seconds
+                )
+                if should_reconcile and self._reconcile is not None:
+                    try:
+                        self._reconcile()
+                        self.last_reconcile_error = None
+                        self._last_reconcile_at = self._clock()
+                    except Exception as e:
+                        self.last_reconcile_error = str(getattr(e, "detail", e))
+                        log.warning("marketplace reconcile lỗi: %s", self.last_reconcile_error)
+
+                # 2. Quét AI attest tự động như hiện hữu.
+                c = self._get_client()
+                active_client = c
+                next_id = c.next_trade_id()
+                for tid in range(self._cursor, next_id):
+                    if tid in self._done:
+                        continue
+                    if self._use_leader_lease and self._db is not None:
+                        if not self._db.acquire_worker_lease(
+                            self._lease_name, self.worker_id, self._lease_ttl_seconds, now=self._clock()
+                        ):
+                            self.is_leader = False
+                            return False
+                    self._process(c, tid)
+                while self._cursor in self._done:
+                    self._done.discard(self._cursor)
+                    self._cursor += 1
+                self.last_tick = self._clock()
+                if not self._tick_error_occurred:
+                    self.last_error = None
+                self._persist_runtime(running=bool(self.running or hold_lease), client=active_client)
+                return True
+            except Exception as e:
+                self.last_error = str(getattr(e, "detail", e))
+                self._persist_runtime(running=bool(self.running or hold_lease), client=active_client)
+                raise
+            finally:
+                if self._use_leader_lease and self._db is not None and not hold_lease and not self.running:
+                    self._db.release_worker_lease(self._lease_name, self.worker_id)
+                    self.is_leader = False
+
+    def _get_status(self, tid: int) -> Optional[dict]:
+        if self._db is not None:
+            st = self._db.get_agent_job_status(tid)
+            if st is not None:
+                self.status[tid] = st
+            return st
+        return self.status.get(tid)
 
     def _set(self, tid: int, phase: str, detail: str = "", attempts: Optional[int] = None) -> None:
-        prev = self.status.get(tid, {})
-        self.status[tid] = {
-            "phase": phase, "detail": detail,
-            "attempts": prev.get("attempts", 0) if attempts is None else attempts,
-            "updated_at": int(time.time()),
+        prev = self._get_status(tid) or {}
+        eff_attempts = prev.get("attempts", 0) if attempts is None else attempts
+        ts = int(self._clock())
+        entry = {
+            "phase": phase,
+            "detail": detail,
+            "attempts": eff_attempts,
+            "updated_at": ts,
         }
+        self.status[tid] = entry
+        if self._db is not None:
+            self._db.upsert_agent_job_status(tid, phase, detail, eff_attempts, updated_at=ts)
 
     def _process(self, c: EscrowClient, tid: int) -> None:
         t = c.get_trade(tid)
@@ -187,12 +332,12 @@ class AutoAgent:
         if any(r not in uris for r in ROLES):
             return  # chờ frontend đăng ký URI; trạng thái "waiting_uris" suy ra ở status_for()
 
-        st = self.status.get(tid, {})
+        st = self._get_status(tid) or {}
         attempts = st.get("attempts", 0)
         if attempts >= self.MAX_ATTEMPTS:
             return
         backoff = self.RETRY_DELAY * 2 ** max(attempts - 1, 0)
-        if st.get("phase") == "retrying" and time.time() - st.get("updated_at", 0) < backoff:
+        if st.get("phase") == "retrying" and self._clock() - st.get("updated_at", 0) < backoff:
             return
 
         self._set(tid, "analyzing")
@@ -202,6 +347,10 @@ class AutoAgent:
         except Exception as e:
             code = getattr(e, "status_code", None)
             detail = str(getattr(e, "detail", e))
+            if getattr(e, "error_code", None) == "INSECURE_CONFIG":
+                reasons = getattr(e, "reasons", None)
+                self.last_error = f"INSECURE_CONFIG: {', '.join(reasons)}" if reasons else detail
+                self._tick_error_occurred = True
             if code == 409:  # đang được xử lý ở nơi khác / đã đổi trạng thái → nhịp sau tự phân loại lại
                 self._set(tid, "queued", detail)
                 return
@@ -231,7 +380,7 @@ class AutoAgent:
         elif missing:
             out["phase"] = "waiting_uris"
         else:
-            st = self.status.get(t.trade_id)
+            st = self._get_status(t.trade_id)
             out["phase"] = "queued"
             if st:
                 out.update(st)

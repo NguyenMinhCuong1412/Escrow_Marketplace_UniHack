@@ -37,6 +37,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -123,6 +124,10 @@ class Settings:
     proxy_sig_ttl_seconds: int = 300
     trust_proxy_forwarded_for: bool = False
     verify_chain_before_ttl_release: bool = True
+    worker_lease_ttl_seconds: float = 60.0
+    trade_lock_ttl_seconds: float = 300.0
+    reconcile_poll_seconds: float = 0.0
+    worker_id: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -149,6 +154,10 @@ class Settings:
             proxy_sig_ttl_seconds=int(os.environ.get("PROXY_SIG_TTL_SECONDS", cls.proxy_sig_ttl_seconds)),
             trust_proxy_forwarded_for=_env_bool("TRUST_PROXY_FORWARDED_FOR", False),
             verify_chain_before_ttl_release=_env_bool("VERIFY_CHAIN_BEFORE_TTL_RELEASE", True),
+            worker_lease_ttl_seconds=float(os.environ.get("WORKER_LEASE_TTL_SECONDS", cls.worker_lease_ttl_seconds)),
+            trade_lock_ttl_seconds=float(os.environ.get("TRADE_LOCK_TTL_SECONDS", cls.trade_lock_ttl_seconds)),
+            reconcile_poll_seconds=float(os.environ.get("RECONCILE_POLL_SECONDS", cls.reconcile_poll_seconds)),
+            worker_id=os.environ.get("WORKER_ID") or None,
         )
         if os.environ.get("ESCROW_ABI_PATH"):
             s.escrow_abi_path = Path(os.environ["ESCROW_ABI_PATH"])
@@ -208,15 +217,16 @@ def extract_gateway_host(gw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Kho pHash đã biết (Vai 1) — lưu file JSON để sống qua restart
+# Kho pHash đã biết (Vai 1) — ưu tiên SQLite WAL dùng chung, fallback JSON khi db=None
 # ---------------------------------------------------------------------------
 
 class KnownHashStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, db: Optional[MarketplaceDB] = None):
         self.path = path
+        self._db = db
         self._lock = threading.Lock()
         self._items: list[dict] = []
-        if path.exists():
+        if self._db is None and path.exists():
             try:
                 self._items = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
@@ -224,11 +234,17 @@ class KnownHashStore:
 
     def hashes_excluding(self, trade_id: int) -> tuple[list[imagehash.ImageHash], list[dict]]:
         """Bỏ qua hash của chính giao dịch này (verify lại không bị tính là tái sử dụng)."""
+        if self._db is not None:
+            rows = self._db.list_known_phashes(exclude_trade_id=trade_id)
+            return [imagehash.hex_to_hash(r["phash"]) for r in rows], rows
         with self._lock:
             rows = [r for r in self._items if r["trade_id"] != trade_id]
         return [imagehash.hex_to_hash(r["phash"]) for r in rows], rows
 
     def add(self, trade_id: int, role: str, phash: str) -> None:
+        if self._db is not None:
+            self._db.add_known_phash(trade_id, role, phash)
+            return
         with self._lock:
             if any(r["trade_id"] == trade_id and r["role"] == role for r in self._items):
                 return
@@ -239,6 +255,8 @@ class KnownHashStore:
             tmp.replace(self.path)
 
     def __len__(self) -> int:
+        if self._db is not None:
+            return self._db.count_known_phashes()
         return len(self._items)
 
 
@@ -420,18 +438,375 @@ class VerifyResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Shared Backend Runtime (dùng chung cho FastAPI API và standalone worker.py)
+# ---------------------------------------------------------------------------
+
+class BackendRuntime:
+    """Khởi tạo và quản lý DB dùng chung, migration JSON cũ, chain clients và lõi verify."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        client: Optional[EscrowClient] = None,
+        *,
+        reconcile_interval_seconds: Optional[float] = None,
+    ):
+        self.settings = settings
+        self.reports_dir = settings.data_dir / "reports"
+        self.db = MarketplaceDB(settings.data_dir / "marketplace.db")
+        self.migration_summary = self.db.migrate_legacy_json_stores(settings.data_dir)
+        self.store = KnownHashStore(settings.data_dir / "known_hashes.json", db=self.db)
+        self.registry = UriRegistry(settings.data_dir / "trade_uris.json", db=self.db)
+        self.marketplace = MarketplaceService(db=self.db, settings=settings, download_fn=download)
+        self.state: dict = {"client": client, "readonly_client": client}
+        self._trade_locks: dict[int, threading.Lock] = {}
+        self._trade_locks_guard = threading.Lock()
+
+        eff_reconcile_interval = (
+            settings.reconcile_poll_seconds
+            if reconcile_interval_seconds is None
+            else float(reconcile_interval_seconds)
+        )
+        self.agent = AutoAgent(
+            self.get_client,
+            self.registry,
+            self._agent_verify,
+            settings.agent_poll_seconds,
+            reconcile=self.reconcile_marketplace_readonly,
+            db=self.db,
+            worker_id=settings.worker_id,
+            lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+            reconcile_interval_seconds=eff_reconcile_interval,
+        )
+
+    def _resolve_escrow_address(self, rpc_url: str) -> str:
+        address = self.settings.escrow_address
+        if not address:
+            cid = self.settings.chain_id
+            if cid is None:
+                try:
+                    cid = int(Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10})).eth.chain_id)
+                except Exception as exc:
+                    raise HTTPException(502, f"RPC error: {exc}")
+            address = find_escrow_address(self.settings.deployments_dir, cid)
+            if not address:
+                raise HTTPException(503, f"Thiếu ESCROW_ADDRESS và không có contracts/deployments/{cid}.json")
+        return address
+
+    def get_client(self) -> EscrowClient:
+        """Signing client cho attest() — bắt buộc có RPC_URL và AGENT_PRIVATE_KEY."""
+        if self.state["client"] is not None:
+            return self.state["client"]
+        missing = [
+            k for k, v in (("RPC_URL", self.settings.rpc_url), ("AGENT_PRIVATE_KEY", self.settings.agent_private_key))
+            if not v
+        ]
+        if missing:
+            raise HTTPException(503, f"Thiếu cấu hình: {', '.join(missing)} (xem backend/.env.example)")
+        if not self.settings.escrow_abi_path.exists():
+            raise HTTPException(503, f"Không thấy ABI tại {self.settings.escrow_abi_path} — chạy `forge build` trong contracts/")
+        abi = load_abi(self.settings.escrow_abi_path)
+        address = self._resolve_escrow_address(self.settings.rpc_url)
+        self.state["client"] = EscrowClient(self.settings.rpc_url, address, abi, self.settings.agent_private_key)
+        self.state["readonly_client"] = self.state["client"]
+        log.info("Kết nối Escrow %s, agent %s", address, self.state["client"].agent_address)
+        return self.state["client"]
+
+    def require_readonly_client(self) -> EscrowClient:
+        """Read-only chain client cho các endpoint chỉ đọc — KHÔNG cần AGENT_PRIVATE_KEY."""
+        if self.state["client"] is not None:
+            return self.state["client"]
+        if self.state["readonly_client"] is not None:
+            return self.state["readonly_client"]
+        if not self.settings.rpc_url:
+            raise HTTPException(503, "Thiếu cấu hình: RPC_URL (xem backend/.env.example)")
+        if self.settings.agent_private_key:
+            return self.get_client()
+        if not self.settings.escrow_abi_path.exists():
+            raise HTTPException(503, f"Không thấy ABI tại {self.settings.escrow_abi_path} — chạy `forge build` trong contracts/")
+        abi = load_abi(self.settings.escrow_abi_path)
+        address = self._resolve_escrow_address(self.settings.rpc_url)
+        rc = EscrowClient(self.settings.rpc_url, address, abi, agent_private_key=None)
+        self.state["readonly_client"] = rc
+        log.info("Kết nối Escrow read-only %s", address)
+        return rc
+
+    def get_readonly_client(self) -> Optional[EscrowClient]:
+        try:
+            return self.require_readonly_client()
+        except HTTPException:
+            return None
+
+    def get_chain_id(self, c: EscrowClient) -> int:
+        if self.state.get("chain_id") is None:
+            if hasattr(c, "chain_id") and callable(c.chain_id):
+                self.state["chain_id"] = int(c.chain_id())
+            else:
+                self.state["chain_id"] = 31337
+        return self.state["chain_id"]
+
+    def check_security_guard(self, c: EscrowClient) -> None:
+        cid = self.get_chain_id(c)
+        reasons = insecure_reasons(self.settings, cid)
+        if reasons:
+            raise InsecureConfigError(reasons)
+
+    def active_chain_context(self, require_client: bool = False) -> tuple[int, str, Optional[EscrowClient]]:
+        """Trả (chain_id, escrow_address_lower, client_or_none) và luôn kiểm tra fail-closed guard.
+        Các thao tác marketplace (bind-trade, sync, reconcile) chỉ đọc chain nên dùng read-only client."""
+        if require_client or self.state["client"] is not None:
+            c = self.require_readonly_client()
+            self.check_security_guard(c)
+            cid = self.get_chain_id(c)
+            esc = (
+                (c.escrow.address if hasattr(c, "escrow") and hasattr(c.escrow, "address") else None)
+                or self.settings.escrow_address
+                or find_escrow_address(self.settings.deployments_dir, cid)
+                or "0x0000000000000000000000000000000000000000"
+            )
+            return cid, esc.lower(), c
+
+        if self.settings.rpc_url:
+            known_cid = self.state.get("chain_id") if self.state.get("chain_id") is not None else self.settings.chain_id
+            if known_cid is not None:
+                reasons = insecure_reasons(self.settings, known_cid)
+                if reasons:
+                    raise InsecureConfigError(reasons)
+            try:
+                c = self.get_readonly_client()
+                if c is not None:
+                    self.check_security_guard(c)
+                    cid = self.get_chain_id(c)
+                    esc = (
+                        (c.escrow.address if hasattr(c, "escrow") and hasattr(c.escrow, "address") else None)
+                        or self.settings.escrow_address
+                        or find_escrow_address(self.settings.deployments_dir, cid)
+                        or "0x0000000000000000000000000000000000000000"
+                    )
+                    return cid, esc.lower(), c
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log.warning("RPC không khả dụng trong active_chain_context: %s", exc)
+                if known_cid is None:
+                    raise HTTPException(502, "Không kết nối được RPC để xác định mạng Escrow.")
+                esc = (
+                    self.settings.escrow_address
+                    or find_escrow_address(self.settings.deployments_dir, known_cid)
+                    or "0x0000000000000000000000000000000000000000"
+                )
+                return int(known_cid), esc.lower(), None
+
+        cid = self.settings.chain_id if self.settings.chain_id is not None else 31337
+        reasons = insecure_reasons(self.settings, cid)
+        if reasons:
+            raise InsecureConfigError(reasons)
+        esc = (
+            self.settings.escrow_address
+            or find_escrow_address(self.settings.deployments_dir, cid)
+            or "0x0000000000000000000000000000000000000000"
+        )
+        return cid, esc.lower(), None
+
+    def lock_for(self, trade_id: int) -> threading.Lock:
+        with self._trade_locks_guard:
+            return self._trade_locks.setdefault(trade_id, threading.Lock())
+
+    def get_report(self, trade_id: int) -> Optional[dict]:
+        stored = self.db.get_attest_report(trade_id)
+        if stored is not None:
+            return stored
+        f = self.reports_dir / f"{trade_id}.json"
+        if f.exists():
+            try:
+                return json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+        return None
+
+    def load_trade(self, trade_id: int):
+        try:
+            t = self.require_readonly_client().get_trade(trade_id)
+        except ChainError as e:
+            raise HTTPException(502, str(e))
+        if not t.exists:
+            raise HTTPException(404, f"Trade {trade_id} không tồn tại")
+        return t
+
+    def is_external_worker_active(self, now: Optional[float] = None) -> tuple[bool, Optional[dict]]:
+        meta = self.db.get_agent_runtime_meta()
+        if meta is None:
+            return False, None
+        ts = time.time() if now is None else float(now)
+        fresh_window = max(
+            float(self.settings.worker_lease_ttl_seconds),
+            float(self.settings.agent_poll_seconds) * 4.0,
+            30.0,
+        )
+        hb = meta.get("heartbeat_at")
+        active = bool(meta.get("running")) and hb is not None and (ts - hb) <= fresh_window
+        return active, meta
+
+    def reconcile_marketplace_readonly(self) -> None:
+        cid, esc, active_client = self.active_chain_context(require_client=False)
+        self.marketplace.reconcile(client=active_client, chain_id=cid, escrow_address=esc)
+
+    def _agent_verify(self, trade_id: int, uris: dict[str, str]) -> VerifyResponse:
+        try:
+            return self.run_verification(VerifyRequest(
+                trade_id=trade_id,
+                listing_image_url=uris["listing"],
+                seller_evidence_url=uris["seller"],
+                buyer_evidence_url=uris["buyer"],
+            ))
+        except InsecureConfigError as exc:
+            self.agent.last_error = f"INSECURE_CONFIG: {', '.join(exc.reasons)}"
+            raise
+
+    def run_verification(self, req: VerifyRequest) -> VerifyResponse:
+        """Verification core shared by the manual endpoint and the autonomous agent (DEC-005 option A)."""
+        started = time.time()
+        c = self.require_readonly_client() if req.dry_run else self.get_client()
+        self.check_security_guard(c)
+
+        # 3. Validate listing_image_url scheme (must be ipfs://)
+        if not req.listing_image_url.startswith("ipfs://"):
+            raise HTTPException(status_code=422, detail="listing_image_url must be an ipfs:// URI")
+
+        lock = self.lock_for(req.trade_id)
+        if not lock.acquire(blocking=False):
+            raise HTTPException(409, f"Trade {req.trade_id} đang được xử lý")
+        lock_owner = f"{self.agent.worker_id}:{uuid.uuid4().hex}"
+        db_lock_acquired = False
+        try:
+            db_lock_acquired = self.db.acquire_trade_lock(
+                req.trade_id, lock_owner, ttl_seconds=self.settings.trade_lock_ttl_seconds
+            )
+            if not db_lock_acquired:
+                raise HTTPException(409, f"Trade {req.trade_id} đang được xử lý")
+
+            # 4. Dữ liệu tin cậy lấy từ chain
+            try:
+                trade = c.get_trade(req.trade_id)
+            except ChainError as e:
+                raise HTTPException(502, str(e))
+            if not trade.exists:
+                raise HTTPException(404, f"Trade {req.trade_id} không tồn tại")
+            if trade.state != TradeState.AwaitingEvidence:
+                raise HTTPException(409, f"Trade ở trạng thái {trade.state.name}, cần AwaitingEvidence")
+            empty = "0x" + "00" * 32
+            if trade.seller_evidence_hash == empty or trade.buyer_evidence_hash == empty:
+                raise HTTPException(409, "Chưa đủ bằng chứng on-chain từ cả 2 bên")
+
+            # Ràng buộc ảnh niêm yết với chữ ký seller trong sổ URI (SEC-01)
+            registered_listing = self.registry.get(req.trade_id).get("listing")
+            if not registered_listing:
+                raise HTTPException(409, "Chưa có ảnh niêm yết đã ký trong sổ URI, cần seller ký xác nhận")
+            if req.listing_image_url != registered_listing:
+                raise HTTPException(422, "listing_image_url không khớp ảnh niêm yết seller đã ký")
+
+            # 5. Bằng chứng phải đúng cái đã neo on-chain
+            if self.settings.enforce_evidence_hash:
+                if evidence_hash_of(req.seller_evidence_url) != trade.seller_evidence_hash:
+                    raise HTTPException(422, "seller_evidence_url không khớp sellerEvidenceHash on-chain")
+                if evidence_hash_of(req.buyer_evidence_url) != trade.buyer_evidence_hash:
+                    raise HTTPException(422, "buyer_evidence_url không khớp buyerEvidenceHash on-chain")
+
+            seller_rep = c.reputation_of(trade.seller)
+            buyer_rep = c.reputation_of(trade.buyer)
+
+            # 6. Tải và phân tích
+            with tempfile.TemporaryDirectory(prefix=f"trade{req.trade_id}_") as wd:
+                try:
+                    listing = download(req.listing_image_url, self.settings, wd, "listing")
+                    seller = download(req.seller_evidence_url, self.settings, wd, "seller")
+                    buyer = download(req.buyer_evidence_url, self.settings, wd, "buyer")
+                except DownloadError as e:
+                    raise HTTPException(422, str(e))
+
+                # Compute keccak256 hash of listing image
+                with open(listing, "rb") as lf:
+                    listing_bytes = lf.read()
+                listing_hash = Web3.to_hex(Web3.keccak(listing_bytes)).lower()
+
+                known, _ = self.store.hashes_excluding(req.trade_id)
+                try:
+                    result = ec.analyze_evidence(
+                        req.trade_id, listing, seller, buyer, trade.nonce,
+                        seller_rep, buyer_rep, trade.item_value,
+                        known_hashes=known, with_visual=req.include_visual,
+                    )
+                except ValueError as e:  # ảnh/video hỏng
+                    raise HTTPException(422, f"Bằng chứng không đọc được: {e}")
+                except RuntimeError as e:  # thiếu Tesseract...
+                    log.exception("pipeline error")
+                    raise HTTPException(500, f"Lỗi pipeline: {e}")
+
+            report = result.report
+            report_hash = "0x" + result.report_hash.hex()
+            log.info("trade %s: risk=%s flagged=%s notes=%s", req.trade_id, report.risk_score, report.flagged, report.notes)
+
+            # 7. Gửi attest()
+            tx_hash = None
+            if not req.dry_run:
+                try:
+                    tx_hash = c.send_attest(req.trade_id, report.risk_score, report.flagged, result.report_hash)
+                except ChainError as e:
+                    log.error("attest failed for trade %s: %s", req.trade_id, e)
+                    raise HTTPException(502, str(e))
+                self.store.add(req.trade_id, "seller", result.seller_phash)
+                self.store.add(req.trade_id, "buyer", result.buyer_phash)
+
+            report_dict = report.to_dict()
+            report_dict["listing_hash"] = listing_hash
+
+            resp = VerifyResponse(
+                trade_id=req.trade_id,
+                report=report_dict,
+                report_hash=report_hash,
+                report_json=report.canonical_json(),
+                attested=tx_hash is not None,
+                tx_hash=tx_hash,
+                match_visual_png_b64=result.match_visual_b64() if req.include_visual else None,
+                duration_ms=int((time.time() - started) * 1000),
+            )
+
+            # 8. Lưu report vào SQLite WAL dùng chung (chỉ khi đã attest — bản neo on-chain)
+            if tx_hash:
+                payload = {
+                    **resp.model_dump(),
+                    "listing_hash": listing_hash,
+                    "evidence": {
+                        "listing_image_url": req.listing_image_url,
+                        "seller_evidence_url": req.seller_evidence_url,
+                        "buyer_evidence_url": req.buyer_evidence_url,
+                    },
+                }
+                self.db.save_attest_report(req.trade_id, report_hash, payload)
+            return resp
+        finally:
+            if db_lock_acquired:
+                try:
+                    self.db.release_trade_lock(req.trade_id, lock_owner)
+                except Exception:
+                    pass
+            lock.release()
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
 def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClient] = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    runtime = BackendRuntime(settings=settings, client=client)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.agent_auto:
-            agent.start()
+            runtime.agent.start()
         yield
-        agent.stop()
+        runtime.agent.stop()
 
     app = FastAPI(title="Escrow AI Attest Service", version="1.1.0", lifespan=lifespan)
     if settings.cors_origins:
@@ -443,14 +818,23 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             allow_headers=["*"],
         )
 
-    reports_dir = settings.data_dir / "reports"
-    store = KnownHashStore(settings.data_dir / "known_hashes.json")
-    registry = UriRegistry(settings.data_dir / "trade_uris.json")
-    db = MarketplaceDB(settings.data_dir / "marketplace.db")
-    marketplace = MarketplaceService(db=db, settings=settings, download_fn=download)
-    state = {"client": client, "readonly_client": client}
-    trade_locks: dict[int, threading.Lock] = {}
-    trade_locks_guard = threading.Lock()
+    store = runtime.store
+    registry = runtime.registry
+    db = runtime.db
+    marketplace = runtime.marketplace
+    agent = runtime.agent
+    active_chain_context = runtime.active_chain_context
+    get_chain_id = runtime.get_chain_id
+    check_security_guard = runtime.check_security_guard
+    run_verification = runtime.run_verification
+    load_trade = runtime.load_trade
+
+    app.state.runtime = runtime
+    app.state.agent = agent
+    app.state.registry = registry
+    app.state.store = store
+    app.state.db = db
+    app.state.marketplace = marketplace
 
     @app.exception_handler(InsecureConfigError)
     def insecure_config_handler(request: Request, exc: InsecureConfigError):
@@ -479,47 +863,9 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
     RATE_LIMIT_WINDOW = 60.0
     RATE_LIMIT_MAX_REQUESTS = 10
 
-    def get_client() -> EscrowClient:
-        if state["client"] is not None:
-            return state["client"]
-        missing = [k for k, v in (("RPC_URL", settings.rpc_url), ("AGENT_PRIVATE_KEY", settings.agent_private_key)) if not v]
-        if missing:
-            raise HTTPException(503, f"Thiếu cấu hình: {', '.join(missing)} (xem backend/.env.example)")
-        if not settings.escrow_abi_path.exists():
-            raise HTTPException(503, f"Không thấy ABI tại {settings.escrow_abi_path} — chạy `forge build` trong contracts/")
-        abi = load_abi(settings.escrow_abi_path)
-        address = settings.escrow_address
-        if not address:
-            from web3 import Web3
-            cid = int(Web3(Web3.HTTPProvider(settings.rpc_url)).eth.chain_id)
-            address = find_escrow_address(settings.deployments_dir, cid)
-            if not address:
-                raise HTTPException(503, f"Thiếu ESCROW_ADDRESS và không có contracts/deployments/{cid}.json")
-        state["client"] = EscrowClient(settings.rpc_url, address, abi, settings.agent_private_key)
-        log.info("Kết nối Escrow %s, agent %s", address, state["client"].agent_address)
-        return state["client"]
-
-    def get_chain_id(c: EscrowClient) -> int:
-        if state.get("chain_id") is None:
-            if hasattr(c, "chain_id") and callable(c.chain_id):
-                state["chain_id"] = int(c.chain_id())
-            else:
-                state["chain_id"] = 31337
-        return state["chain_id"]
-
-    def check_security_guard(c: EscrowClient) -> None:
-        cid = get_chain_id(c)
-        reasons = insecure_reasons(settings, cid)
-        if reasons:
-            raise InsecureConfigError(reasons)
-
-    def lock_for(trade_id: int) -> threading.Lock:
-        with trade_locks_guard:
-            return trade_locks.setdefault(trade_id, threading.Lock())
-
     @app.get("/health")
     def health():
-        info = {"ok": True, "embedding_backend": ec.embedding_backend(), "known_hashes": len(store)}
+        info: dict = {"ok": True, "embedding_backend": ec.embedding_backend(), "known_hashes": len(store)}
         try:
             ec.pytesseract.get_tesseract_version()
             info["tesseract"] = True
@@ -527,19 +873,21 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             info["tesseract"] = False
         cid = None
         reasons: list[str] = []
+        signer_configured = bool(runtime.state["client"] is not None or settings.agent_private_key)
         try:
-            c = get_client()
+            c = runtime.get_client() if signer_configured else runtime.require_readonly_client()
             cid = get_chain_id(c)
             reasons = insecure_reasons(settings, cid)
             info["chain_id"] = cid
             if hasattr(c, "escrow") and hasattr(c.escrow, "address"):
                 info["escrow"] = c.escrow.address
-            if hasattr(c, "agent_address"):
-                info["agent"] = c.agent_address
-            if hasattr(c, "agent_balance") and callable(c.agent_balance):
-                info["agent_balance_wei"] = str(c.agent_balance())
-            if hasattr(c, "onchain_agent") and callable(c.onchain_agent) and hasattr(c, "agent_address"):
-                info["agent_matches_contract"] = c.onchain_agent().lower() == c.agent_address.lower()
+            if signer_configured:
+                if hasattr(c, "agent_address") and c.agent_address:
+                    info["agent"] = c.agent_address
+                if hasattr(c, "agent_balance") and callable(c.agent_balance):
+                    info["agent_balance_wei"] = str(c.agent_balance())
+                if hasattr(c, "onchain_agent") and callable(c.onchain_agent) and hasattr(c, "agent_address"):
+                    info["agent_matches_contract"] = c.onchain_agent().lower() == c.agent_address.lower()
         except HTTPException as e:
             info.update({"ok": False, "error": e.detail})
         except Exception as e:
@@ -554,27 +902,40 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             "insecure_for_chain": bool(cid is not None and len(reasons) > 0),
         }
 
-        agent_err = agent.last_error
+        meta_active, meta = runtime.is_external_worker_active()
+        if "agent" not in info and meta and meta.get("agent_address"):
+            info["agent"] = meta["agent_address"]
+            if meta.get("agent_balance_wei") is not None:
+                info["agent_balance_wei"] = meta["agent_balance_wei"]
+            if meta.get("agent_matches_contract") is not None:
+                info["agent_matches_contract"] = meta["agent_matches_contract"]
+
+        agent_err = agent.last_error or (meta["last_error"] if meta else None)
         if reasons and not agent_err:
             agent_err = f"INSECURE_CONFIG: {', '.join(reasons)}"
 
+        effective_last_tick = agent.last_tick if agent.last_tick is not None else (meta["last_tick"] if meta else None)
+        external_worker_active = bool(meta_active and (meta is None or meta.get("worker_id") != agent.worker_id))
+
         info.update({
             "agent_auto": settings.agent_auto,
-            "agent_running": agent.running,
-            "agent_last_tick": agent.last_tick,
+            "agent_running": bool(agent.running or meta_active),
+            "agent_last_tick": effective_last_tick,
             "agent_error": agent_err,
+            "agent_signer_configured": signer_configured,
+            "agent_worker_active": external_worker_active,
         })
         return info
 
     @app.get("/trade/{trade_id}")
     def get_trade(trade_id: int):
+        c = runtime.require_readonly_client()
         try:
-            t = get_client().get_trade(trade_id)
+            t = c.get_trade(trade_id)
         except ChainError as e:
             raise HTTPException(502, str(e))
         if not t.exists:
             raise HTTPException(404, f"Trade {trade_id} không tồn tại")
-        c = get_client()
         return {**t.to_json(), "nonce_short": ec.short_nonce(t.nonce),
                 "seller_reputation": c.reputation_of(t.seller), "buyer_reputation": c.reputation_of(t.buyer)}
 
@@ -583,7 +944,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         """Mã QR chứa nonce của giao dịch: đặt cạnh món hàng khi chụp thay cho viết tay.
         Sinh bằng cùng thư viện với bộ đọc trong ai-pipeline → chắc chắn đọc lại được."""
         try:
-            t = get_client().get_trade(trade_id)
+            t = runtime.require_readonly_client().get_trade(trade_id)
         except ChainError as e:
             raise HTTPException(502, str(e))
         if not t.exists:
@@ -598,10 +959,10 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
 
     @app.get("/report/{trade_id}")
     def get_report(trade_id: int):
-        f = reports_dir / f"{trade_id}.json"
-        if not f.exists():
+        payload = runtime.get_report(trade_id)
+        if payload is None:
             raise HTTPException(404, f"Chưa có report cho trade {trade_id}")
-        return json.loads(f.read_text(encoding="utf-8"))
+        return payload
 
     def check_api_key(x_api_key: Optional[str]) -> None:
         if settings.attest_api_key:
@@ -629,88 +990,6 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
         key = client_ip if bucket == "verify" else f"{bucket}:{client_ip}"
         _consume_rate_limit(key, limit, marketplace=False)
-
-    def get_readonly_client() -> Optional[EscrowClient]:
-        if state["client"] is not None:
-            return state["client"]
-        if state["readonly_client"] is not None:
-            return state["readonly_client"]
-        if not settings.rpc_url:
-            return None
-        if settings.agent_private_key:
-            c = get_client()
-            state["readonly_client"] = c
-            return c
-        if not settings.escrow_abi_path.exists():
-            return None
-        abi = load_abi(settings.escrow_abi_path)
-        address = settings.escrow_address
-        if not address:
-            cid = settings.chain_id
-            if cid is None:
-                cid = int(Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10})).eth.chain_id)
-            address = find_escrow_address(settings.deployments_dir, cid)
-        if not address:
-            return None
-        rc = EscrowClient(settings.rpc_url, address, abi, agent_private_key=None)
-        state["readonly_client"] = rc
-        return rc
-
-    def active_chain_context(require_client: bool = False) -> tuple[int, str, Optional[EscrowClient]]:
-        """Trả (chain_id, escrow_address_lower, client_or_none) và luôn kiểm tra fail-closed guard."""
-        if require_client or state["client"] is not None:
-            c = get_client()
-            check_security_guard(c)
-            cid = get_chain_id(c)
-            esc = (
-                (c.escrow.address if hasattr(c, "escrow") and hasattr(c.escrow, "address") else None)
-                or settings.escrow_address
-                or find_escrow_address(settings.deployments_dir, cid)
-                or "0x0000000000000000000000000000000000000000"
-            )
-            return cid, esc.lower(), c
-
-        if settings.rpc_url:
-            known_cid = state.get("chain_id") if state.get("chain_id") is not None else settings.chain_id
-            if known_cid is not None:
-                reasons = insecure_reasons(settings, known_cid)
-                if reasons:
-                    raise InsecureConfigError(reasons)
-            try:
-                c = get_readonly_client()
-                if c is not None:
-                    check_security_guard(c)
-                    cid = get_chain_id(c)
-                    esc = (
-                        (c.escrow.address if hasattr(c, "escrow") and hasattr(c.escrow, "address") else None)
-                        or settings.escrow_address
-                        or find_escrow_address(settings.deployments_dir, cid)
-                        or "0x0000000000000000000000000000000000000000"
-                    )
-                    return cid, esc.lower(), c
-            except HTTPException:
-                raise
-            except Exception as exc:
-                log.warning("RPC không khả dụng trong active_chain_context: %s", exc)
-                if known_cid is None:
-                    raise HTTPException(502, "Không kết nối được RPC để xác định mạng Escrow.")
-                esc = (
-                    settings.escrow_address
-                    or find_escrow_address(settings.deployments_dir, known_cid)
-                    or "0x0000000000000000000000000000000000000000"
-                )
-                return int(known_cid), esc.lower(), None
-
-        cid = settings.chain_id if settings.chain_id is not None else 31337
-        reasons = insecure_reasons(settings, cid)
-        if reasons:
-            raise InsecureConfigError(reasons)
-        esc = (
-            settings.escrow_address
-            or find_escrow_address(settings.deployments_dir, cid)
-            or "0x0000000000000000000000000000000000000000"
-        )
-        return cid, esc.lower(), None
 
     def resolve_read_rate_key(request: Request, x_api_key: Optional[str], x_authenticated_wallet: Optional[str]) -> str:
         """Khóa rate-limit theo ví (nếu có) hoặc IP thật qua proxy tin cậy thay vì IP proxy."""
@@ -806,157 +1085,9 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         check_rate_limit(request)  # 2. Rate limit (10 req/min/IP)
         return run_verification(req)
 
-    def run_verification(req: VerifyRequest) -> VerifyResponse:
-        """Verification core shared by the manual endpoint and the autonomous agent (DEC-005 option A)."""
-        started = time.time()
-        c = get_client()
-        check_security_guard(c)
-
-        # 3. Validate listing_image_url scheme (must be ipfs://)
-        if not req.listing_image_url.startswith("ipfs://"):
-            raise HTTPException(status_code=422, detail="listing_image_url must be an ipfs:// URI")
-
-        lock = lock_for(req.trade_id)
-        if not lock.acquire(blocking=False):
-            raise HTTPException(409, f"Trade {req.trade_id} đang được xử lý")
-        try:
-            # 4. Dữ liệu tin cậy lấy từ chain
-            try:
-                trade = c.get_trade(req.trade_id)
-            except ChainError as e:
-                raise HTTPException(502, str(e))
-            if not trade.exists:
-                raise HTTPException(404, f"Trade {req.trade_id} không tồn tại")
-            if trade.state != TradeState.AwaitingEvidence:
-                raise HTTPException(409, f"Trade ở trạng thái {trade.state.name}, cần AwaitingEvidence")
-            empty = "0x" + "00" * 32
-            if trade.seller_evidence_hash == empty or trade.buyer_evidence_hash == empty:
-                raise HTTPException(409, "Chưa đủ bằng chứng on-chain từ cả 2 bên")
-
-            # Ràng buộc ảnh niêm yết với chữ ký seller trong sổ URI (SEC-01)
-            registered_listing = registry.get(req.trade_id).get("listing")
-            if not registered_listing:
-                raise HTTPException(409, "Chưa có ảnh niêm yết đã ký trong sổ URI, cần seller ký xác nhận")
-            if req.listing_image_url != registered_listing:
-                raise HTTPException(422, "listing_image_url không khớp ảnh niêm yết seller đã ký")
-
-            # 5. Bằng chứng phải đúng cái đã neo on-chain
-            if settings.enforce_evidence_hash:
-                if evidence_hash_of(req.seller_evidence_url) != trade.seller_evidence_hash:
-                    raise HTTPException(422, "seller_evidence_url không khớp sellerEvidenceHash on-chain")
-                if evidence_hash_of(req.buyer_evidence_url) != trade.buyer_evidence_hash:
-                    raise HTTPException(422, "buyer_evidence_url không khớp buyerEvidenceHash on-chain")
-
-            seller_rep = c.reputation_of(trade.seller)
-            buyer_rep = c.reputation_of(trade.buyer)
-
-            # 6. Tải và phân tích
-            with tempfile.TemporaryDirectory(prefix=f"trade{req.trade_id}_") as wd:
-                try:
-                    listing = download(req.listing_image_url, settings, wd, "listing")
-                    seller = download(req.seller_evidence_url, settings, wd, "seller")
-                    buyer = download(req.buyer_evidence_url, settings, wd, "buyer")
-                except DownloadError as e:
-                    raise HTTPException(422, str(e))
-
-                # Compute keccak256 hash of listing image
-                with open(listing, "rb") as lf:
-                    listing_bytes = lf.read()
-                listing_hash = Web3.to_hex(Web3.keccak(listing_bytes)).lower()
-
-                known, _ = store.hashes_excluding(req.trade_id)
-                try:
-                    result = ec.analyze_evidence(
-                        req.trade_id, listing, seller, buyer, trade.nonce,
-                        seller_rep, buyer_rep, trade.item_value,
-                        known_hashes=known, with_visual=req.include_visual,
-                    )
-                except ValueError as e:  # ảnh/video hỏng
-                    raise HTTPException(422, f"Bằng chứng không đọc được: {e}")
-                except RuntimeError as e:  # thiếu Tesseract...
-                    log.exception("pipeline error")
-                    raise HTTPException(500, f"Lỗi pipeline: {e}")
-
-            report = result.report
-            report_hash = "0x" + result.report_hash.hex()
-            log.info("trade %s: risk=%s flagged=%s notes=%s", req.trade_id, report.risk_score, report.flagged, report.notes)
-
-            # 7. Gửi attest()
-            tx_hash = None
-            if not req.dry_run:
-                try:
-                    tx_hash = c.send_attest(req.trade_id, report.risk_score, report.flagged, result.report_hash)
-                except ChainError as e:
-                    log.error("attest failed for trade %s: %s", req.trade_id, e)
-                    raise HTTPException(502, str(e))
-                store.add(req.trade_id, "seller", result.seller_phash)
-                store.add(req.trade_id, "buyer", result.buyer_phash)
-
-            report_dict = report.to_dict()
-            report_dict["listing_hash"] = listing_hash
-
-            resp = VerifyResponse(
-                trade_id=req.trade_id,
-                report=report_dict,
-                report_hash=report_hash,
-                report_json=report.canonical_json(),
-                attested=tx_hash is not None,
-                tx_hash=tx_hash,
-                match_visual_png_b64=result.match_visual_b64() if req.include_visual else None,
-                duration_ms=int((time.time() - started) * 1000),
-            )
-
-            # 8. Lưu report (chỉ khi đã attest — đây là bản neo on-chain)
-            if tx_hash:
-                reports_dir.mkdir(parents=True, exist_ok=True)
-                (reports_dir / f"{req.trade_id}.json").write_text(
-                    json.dumps({**resp.model_dump(), "listing_hash": listing_hash, "evidence": {
-                        "listing_image_url": req.listing_image_url,
-                        "seller_evidence_url": req.seller_evidence_url,
-                        "buyer_evidence_url": req.buyer_evidence_url,
-                    }}, ensure_ascii=False), encoding="utf-8")
-            return resp
-        finally:
-            lock.release()
-
     # -----------------------------------------------------------------------
     # Agent tự động: sổ URI + trạng thái
     # -----------------------------------------------------------------------
-
-    def agent_verify(trade_id: int, uris: dict[str, str]) -> VerifyResponse:
-        try:
-            return run_verification(VerifyRequest(
-                trade_id=trade_id, listing_image_url=uris["listing"],
-                seller_evidence_url=uris["seller"], buyer_evidence_url=uris["buyer"],
-            ))
-        except InsecureConfigError as exc:
-            agent.last_error = f"INSECURE_CONFIG: {', '.join(exc.reasons)}"
-            raise
-
-    def reconcile_marketplace_readonly() -> None:
-        cid, esc, active_client = active_chain_context(require_client=False)
-        marketplace.reconcile(client=active_client, chain_id=cid, escrow_address=esc)
-
-    agent = AutoAgent(
-        get_client,
-        registry,
-        agent_verify,
-        settings.agent_poll_seconds,
-        reconcile=reconcile_marketplace_readonly,
-    )
-    app.state.agent = agent
-    app.state.registry = registry
-    app.state.db = db
-    app.state.marketplace = marketplace
-
-    def load_trade(trade_id: int):
-        try:
-            t = get_client().get_trade(trade_id)
-        except ChainError as e:
-            raise HTTPException(502, str(e))
-        if not t.exists:
-            raise HTTPException(404, f"Trade {trade_id} không tồn tại")
-        return t
 
     @app.post("/trade/{trade_id}/uris")
     def register_uri(
@@ -969,7 +1100,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         bằng chứng phải khớp hash đã neo on-chain, ảnh niêm yết phải có chữ ký ví seller."""
         check_api_key(x_api_key)
         check_rate_limit(request, "uris", 60)
-        c = get_client()
+        c = runtime.require_readonly_client()
         check_security_guard(c)
         if not body.uri.startswith("ipfs://"):
             raise HTTPException(422, "uri must be an ipfs:// URI")
@@ -1002,7 +1133,8 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
 
     @app.get("/agent/status/{trade_id}")
     def agent_status(trade_id: int):
-        return {"enabled": settings.agent_auto, **agent.status_for(load_trade(trade_id))}
+        meta_active, _ = runtime.is_external_worker_active()
+        return {"enabled": bool(settings.agent_auto or meta_active), **agent.status_for(load_trade(trade_id))}
 
     # -----------------------------------------------------------------------
     # Marketplace Endpoints (MKT-002: Listings, Purchase Requests, Bind & Sync)

@@ -1056,6 +1056,49 @@ class MarketplaceService:
             rep = reputation_lookup(row["seller_wallet"]) if reputation_lookup else None
             return self._listing_from_row(conn, row, seller_reputation=rep)
 
+    def _has_expired_unbound_reservations(
+        self,
+        conn: sqlite3.Connection,
+        chain_id: int,
+        escrow_address: str,
+        now: int,
+    ) -> bool:
+        """Kiểm tra O(1) qua partial index idx_requests_expiry xem có giữ chỗ quá hạn chưa xử lý."""
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM purchase_requests pr
+            WHERE pr.status = 'ACCEPTED'
+              AND pr.reservation_expires_at IS NOT NULL
+              AND pr.reservation_expires_at <= ?
+              AND pr.chain_id = ?
+              AND pr.escrow_address = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM listing_trades lt WHERE lt.request_id = pr.id
+              )
+            LIMIT 1
+            """,
+            (now, chain_id, escrow_address),
+        ).fetchone()
+        return row is not None
+
+    def _fetch_listings_page(
+        self,
+        conn: sqlite3.Connection,
+        where_sql: str,
+        params: list[Any],
+        order_sql: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        total = int(conn.execute(f"SELECT COUNT(*) FROM listings WHERE {where_sql}", params).fetchone()[0])
+        rows = conn.execute(
+            f"SELECT * FROM listings WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        items = [self._listing_from_row(conn, r) for r in rows]
+        return total, items
+
     def list_listings(
         self,
         chain_id: int,
@@ -1074,8 +1117,11 @@ class MarketplaceService:
         limit: int = 20,
         client: Optional[Any] = None,
     ) -> dict[str, Any]:
+        # Đường đọc công khai GET /listings thuần đọc SQLite trong trạng thái bình thường
+        # (không chạy quét TTL định kỳ khi không có giữ chỗ quá hạn); khi phát hiện thực sự có
+        # reservation quá hạn chưa kịp đối soát bởi worker, tự fallback kiểm tra chain & đồng bộ
+        # để bảo toàn nguyên trạng thái/tồn kho như phiên bản trước.
         escrow = escrow_address.lower()
-        self.expire_stale_reservations(chain_id, escrow, client=client)
 
         clauses = ["chain_id = ?", "escrow_address = ?"]
         params: list[Any] = [chain_id, escrow]
@@ -1137,14 +1183,22 @@ class MarketplaceService:
         limit = max(1, min(100, int(limit)))
         offset = (page - 1) * limit
         where_sql = " AND ".join(clauses)
+        order_sql = sort_map[sort]
+        now = self.clock()
+        needs_expiry_sync = False
 
         with self.db.read_conn() as conn:
-            total = int(conn.execute(f"SELECT COUNT(*) FROM listings WHERE {where_sql}", params).fetchone()[0])
-            rows = conn.execute(
-                f"SELECT * FROM listings WHERE {where_sql} ORDER BY {sort_map[sort]} LIMIT ? OFFSET ?",
-                [*params, limit, offset],
-            ).fetchall()
-            items = [self._listing_from_row(conn, r) for r in rows]
+            has_expired = self._has_expired_unbound_reservations(conn, chain_id, escrow, now)
+            verify_chain = bool(getattr(self.settings, "verify_chain_before_ttl_release", True))
+            if has_expired and (not verify_chain or client is not None):
+                needs_expiry_sync = True
+            else:
+                total, items = self._fetch_listings_page(conn, where_sql, params, order_sql, limit, offset)
+
+        if needs_expiry_sync:
+            self.expire_stale_reservations(chain_id, escrow, client=client)
+            with self.db.read_conn() as conn:
+                total, items = self._fetch_listings_page(conn, where_sql, params, order_sql, limit, offset)
 
         total_pages = (total + limit - 1) // limit if total > 0 else 0
         return {
