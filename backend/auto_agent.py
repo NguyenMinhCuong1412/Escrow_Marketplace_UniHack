@@ -123,6 +123,7 @@ class AutoAgent:
         lease_ttl_seconds: float = 60.0,
         reconcile_interval_seconds: float = 0.0,
         process_verify_jobs: Optional[Callable[[], None]] = None,
+        sync_trade_index: Optional[Callable[[], None]] = None,
         clock: Callable[[], float] = time.time,
     ):
         self._get_client = get_client
@@ -130,6 +131,7 @@ class AutoAgent:
         self._verify = verify
         self._reconcile = reconcile
         self._process_verify_jobs = process_verify_jobs
+        self._sync_trade_index = sync_trade_index
         self._db = db
         self._clock = clock
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -292,6 +294,21 @@ class AutoAgent:
                 while self._cursor in self._done:
                     self._done.discard(self._cursor)
                     self._cursor += 1
+                # 3. Đồng bộ Trade Index có giới hạn thời gian/chunk sau khi Verify & Attest hoàn tất.
+                if self._sync_trade_index is not None:
+                    if self._use_leader_lease and self._db is not None:
+                        if not self._db.acquire_worker_lease(
+                            self._lease_name, self.worker_id, self._lease_ttl_seconds, now=self._clock()
+                        ):
+                            self.is_leader = False
+                            return False
+                    try:
+                        self._sync_trade_index()
+                    except Exception as e:
+                        log.warning(
+                            "trade_indexer sync lỗi (không chặn attest): %s",
+                            getattr(e, "detail", e),
+                        )
                 self.last_tick = self._clock()
                 if not self._tick_error_occurred:
                     self.last_error = None

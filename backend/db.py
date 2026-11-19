@@ -303,6 +303,46 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_listing_trades_rev_upd AFTER UPDATE ON listing_trades BEGIN
     UPDATE marketplace_state_meta SET listings_version = listings_version + 1 WHERE id = 1;
 END;
+
+CREATE TABLE IF NOT EXISTS trade_index (
+    chain_id INTEGER NOT NULL,
+    contract_address TEXT NOT NULL,
+    trade_id INTEGER NOT NULL,
+    seller TEXT NOT NULL,
+    buyer TEXT NOT NULL,
+    last_known_state INTEGER NOT NULL,
+    flagged INTEGER NOT NULL DEFAULT 0,
+    is_terminal INTEGER NOT NULL DEFAULT 0,
+    created_block INTEGER NOT NULL DEFAULT 0,
+    last_event_block INTEGER NOT NULL DEFAULT 0,
+    last_verified_block INTEGER NOT NULL DEFAULT 0,
+    last_verified_at REAL NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (chain_id, contract_address, trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_index_seller
+ON trade_index (chain_id, contract_address, seller, trade_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_trade_index_buyer
+ON trade_index (chain_id, contract_address, buyer, trade_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_trade_index_open
+ON trade_index (chain_id, contract_address, is_terminal, last_known_state, trade_id DESC);
+
+CREATE TABLE IF NOT EXISTS trade_index_checkpoints (
+    chain_id INTEGER NOT NULL,
+    contract_address TEXT NOT NULL,
+    deploy_block INTEGER NOT NULL DEFAULT 0,
+    last_scanned_block INTEGER NOT NULL DEFAULT 0,
+    last_scanned_block_hash TEXT NOT NULL DEFAULT '',
+    head_block_at_sync INTEGER NOT NULL DEFAULT 0,
+    highest_next_trade_id INTEGER NOT NULL DEFAULT 1,
+    last_sync_at TEXT NOT NULL DEFAULT '',
+    last_sync_epoch REAL NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (chain_id, contract_address)
+);
 """
 
 
@@ -1118,3 +1158,475 @@ class MarketplaceDB:
                 "SELECT listings_version FROM marketplace_state_meta WHERE id = 1"
             ).fetchone()
         return int(row["listings_version"]) if row else 1
+
+    # -- On-Chain Trade Discovery Index (P3-T3 / DEC-027) ------------------
+
+    def get_trade_index_checkpoint(
+        self, chain_id: int, contract_address: str
+    ) -> Optional[dict[str, Any]]:
+        esc = str(contract_address).lower()
+        with self.read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM trade_index_checkpoints
+                WHERE chain_id = ? AND contract_address = ?
+                """,
+                (int(chain_id), esc),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "chain_id": int(row["chain_id"]),
+            "contract_address": str(row["contract_address"]),
+            "deploy_block": int(row["deploy_block"]),
+            "last_scanned_block": int(row["last_scanned_block"]),
+            "last_scanned_block_hash": str(row["last_scanned_block_hash"] or ""),
+            "head_block_at_sync": int(row["head_block_at_sync"]),
+            "highest_next_trade_id": int(row["highest_next_trade_id"]),
+            "last_sync_at": str(row["last_sync_at"] or ""),
+            "last_sync_epoch": float(row["last_sync_epoch"] or 0.0),
+            "last_error": str(row["last_error"] or ""),
+        }
+
+    def upsert_trade_index_entries_and_checkpoint(
+        self,
+        chain_id: int,
+        contract_address: str,
+        entries: list[dict[str, Any]],
+        *,
+        deploy_block: int,
+        last_scanned_block: int,
+        last_scanned_block_hash: str,
+        head_block_at_sync: int,
+        highest_next_trade_id: int,
+        sync_epoch: float,
+        last_error: str = "",
+        force_overwrite_blocks: bool = False,
+    ) -> None:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        ts = float(sync_epoch)
+        iso_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        with self.write_tx() as conn:
+            for item in entries:
+                created_blk = int(item.get("created_block", 0))
+                last_ev_blk = int(item.get("last_event_block", 0))
+                verified_blk = int(item.get("last_verified_block", head_block_at_sync))
+                if force_overwrite_blocks:
+                    created_expr = "excluded.created_block"
+                else:
+                    created_expr = (
+                        "CASE WHEN trade_index.created_block > 0 "
+                        "AND (excluded.created_block = 0 OR trade_index.created_block < excluded.created_block) "
+                        "THEN trade_index.created_block ELSE excluded.created_block END"
+                    )
+                conn.execute(
+                    f"""
+                    INSERT INTO trade_index (
+                        chain_id, contract_address, trade_id, seller, buyer,
+                        last_known_state, flagged, is_terminal,
+                        created_block, last_event_block, last_verified_block,
+                        last_verified_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(chain_id, contract_address, trade_id) DO UPDATE SET
+                        seller = excluded.seller,
+                        buyer = excluded.buyer,
+                        last_known_state = excluded.last_known_state,
+                        flagged = excluded.flagged,
+                        is_terminal = excluded.is_terminal,
+                        created_block = {created_expr},
+                        last_event_block = excluded.last_event_block,
+                        last_verified_block = excluded.last_verified_block,
+                        last_verified_at = excluded.last_verified_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        cid,
+                        esc,
+                        int(item["trade_id"]),
+                        str(item["seller"]).lower(),
+                        str(item["buyer"]).lower(),
+                        int(item["last_known_state"]),
+                        1 if bool(item.get("flagged", False)) else 0,
+                        1 if bool(item.get("is_terminal", False)) else 0,
+                        created_blk,
+                        last_ev_blk,
+                        verified_blk,
+                        ts,
+                        ts,
+                    ),
+                )
+
+            conn.execute(
+                """
+                INSERT INTO trade_index_checkpoints (
+                    chain_id, contract_address, deploy_block,
+                    last_scanned_block, last_scanned_block_hash,
+                    head_block_at_sync, highest_next_trade_id,
+                    last_sync_at, last_sync_epoch, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chain_id, contract_address) DO UPDATE SET
+                    deploy_block = excluded.deploy_block,
+                    last_scanned_block = excluded.last_scanned_block,
+                    last_scanned_block_hash = excluded.last_scanned_block_hash,
+                    head_block_at_sync = excluded.head_block_at_sync,
+                    highest_next_trade_id = excluded.highest_next_trade_id,
+                    last_sync_at = excluded.last_sync_at,
+                    last_sync_epoch = excluded.last_sync_epoch,
+                    last_error = excluded.last_error
+                """,
+                (
+                    cid,
+                    esc,
+                    int(deploy_block),
+                    int(last_scanned_block),
+                    str(last_scanned_block_hash or "").lower(),
+                    int(head_block_at_sync),
+                    max(1, int(highest_next_trade_id)),
+                    iso_ts,
+                    ts,
+                    str(last_error or ""),
+                ),
+            )
+
+    def mark_trade_index_error(
+        self,
+        chain_id: int,
+        contract_address: str,
+        *,
+        deploy_block: int,
+        head_block_at_sync: int,
+        error_msg: str,
+        sync_epoch: float,
+    ) -> None:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        ts = float(sync_epoch)
+        iso_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        init_scanned = max(0, int(deploy_block) - 1) if int(deploy_block) > 0 else 0
+        with self.write_tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO trade_index_checkpoints (
+                    chain_id, contract_address, deploy_block,
+                    last_scanned_block, last_scanned_block_hash,
+                    head_block_at_sync, highest_next_trade_id,
+                    last_sync_at, last_sync_epoch, last_error
+                ) VALUES (?, ?, ?, ?, '', ?, 1, ?, ?, ?)
+                ON CONFLICT(chain_id, contract_address) DO UPDATE SET
+                    head_block_at_sync = CASE
+                        WHEN excluded.head_block_at_sync > trade_index_checkpoints.head_block_at_sync
+                        THEN excluded.head_block_at_sync
+                        ELSE trade_index_checkpoints.head_block_at_sync
+                    END,
+                    last_sync_at = excluded.last_sync_at,
+                    last_error = excluded.last_error
+                """,
+                (
+                    cid,
+                    esc,
+                    int(deploy_block),
+                    init_scanned,
+                    int(head_block_at_sync),
+                    iso_ts,
+                    ts,
+                    str(error_msg or "rpc_error")[:512],
+                ),
+            )
+
+    def list_trade_ids_in_block_window(
+        self, chain_id: int, contract_address: str, since_block: int
+    ) -> list[int]:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        blk = int(since_block)
+        with self.read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_id FROM trade_index
+                WHERE chain_id = ? AND contract_address = ?
+                  AND (created_block >= ? OR last_event_block >= ?)
+                ORDER BY trade_id ASC
+                """,
+                (cid, esc, blk, blk),
+            ).fetchall()
+        return [int(r["trade_id"]) for r in rows]
+
+    def list_stale_active_trade_ids(
+        self, chain_id: int, contract_address: str, verified_before_block: int, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        with self.read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_id, last_known_state, flagged, created_block, last_event_block
+                FROM trade_index
+                WHERE chain_id = ? AND contract_address = ?
+                  AND is_terminal = 0
+                  AND last_verified_block < ?
+                ORDER BY last_verified_at ASC, trade_id DESC
+                LIMIT ?
+                """,
+                (cid, esc, int(verified_before_block), max(0, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "trade_id": int(r["trade_id"]),
+                "last_known_state": int(r["last_known_state"]),
+                "flagged": bool(r["flagged"]),
+                "created_block": int(r["created_block"]),
+                "last_event_block": int(r["last_event_block"]),
+            }
+            for r in rows
+        ]
+
+    def apply_trade_index_reorg_rollback(
+        self,
+        chain_id: int,
+        contract_address: str,
+        *,
+        rollback_from_block: int,
+        valid_next_trade_id: int,
+    ) -> int:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        blk = int(rollback_from_block)
+        nxt = max(1, int(valid_next_trade_id))
+        with self.write_tx() as conn:
+            cur = conn.execute(
+                """
+                DELETE FROM trade_index
+                WHERE chain_id = ? AND contract_address = ? AND trade_id >= ?
+                """,
+                (cid, esc, nxt),
+            )
+            deleted = int(cur.rowcount or 0)
+            conn.execute(
+                """
+                UPDATE trade_index
+                SET is_terminal = 0
+                WHERE chain_id = ? AND contract_address = ?
+                  AND (created_block >= ? OR last_event_block >= ? OR last_verified_block >= ?)
+                """,
+                (cid, esc, blk, blk, blk),
+            )
+            conn.execute(
+                """
+                UPDATE trade_index_checkpoints
+                SET highest_next_trade_id = MIN(highest_next_trade_id, ?)
+                WHERE chain_id = ? AND contract_address = ?
+                """,
+                (nxt, cid, esc),
+            )
+        return deleted
+
+    def find_missing_trade_index_ids(
+        self, chain_id: int, contract_address: str, next_trade_id: int, limit: int = 50
+    ) -> tuple[list[int], int]:
+        nxt = max(1, int(next_trade_id))
+        if nxt <= 1:
+            return [], 0
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        with self.read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_id FROM trade_index
+                WHERE chain_id = ? AND contract_address = ?
+                  AND trade_id >= 1 AND trade_id < ?
+                """,
+                (cid, esc, nxt),
+            ).fetchall()
+        existing = {int(r["trade_id"]) for r in rows}
+        missing = [tid for tid in range(nxt - 1, 0, -1) if tid not in existing]
+        return missing[: max(0, int(limit))], len(missing)
+
+    def finalize_old_terminal_trades(
+        self, chain_id: int, contract_address: str, finalized_block: int
+    ) -> int:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        with self.write_tx() as conn:
+            cur = conn.execute(
+                """
+                UPDATE trade_index
+                SET is_terminal = 1
+                WHERE chain_id = ? AND contract_address = ?
+                  AND is_terminal = 0
+                  AND last_known_state IN (4, 5)
+                  AND last_event_block <= ?
+                """,
+                (cid, esc, int(finalized_block)),
+            )
+            return int(cur.rowcount or 0)
+
+    def query_trade_index(
+        self,
+        chain_id: int,
+        contract_address: str,
+        *,
+        wallet: Optional[str] = None,
+        filter_mode: str = "all",
+        offset: int = 0,
+        limit: int = 50,
+        max_stale_seconds: float = 45.0,
+        max_block_lag: int = 20,
+        now_epoch: Optional[float] = None,
+    ) -> dict[str, Any]:
+        cid = int(chain_id)
+        esc = str(contract_address).lower()
+        now = time.time() if now_epoch is None else float(now_epoch)
+        eff_offset = max(0, int(offset))
+        eff_limit = max(1, min(100, int(limit)))
+        mode = (filter_mode or "all").strip().lower()
+        wallet_norm = wallet.strip().lower() if wallet and wallet.strip() else None
+
+        with self.read_conn() as conn:
+            ckpt = conn.execute(
+                """
+                SELECT * FROM trade_index_checkpoints
+                WHERE chain_id = ? AND contract_address = ?
+                """,
+                (cid, esc),
+            ).fetchone()
+
+            if ckpt is None:
+                return {
+                    "chainId": cid,
+                    "contractAddress": esc,
+                    "deployBlock": 0,
+                    "indexedThroughBlock": 0,
+                    "indexedNextTradeId": 1,
+                    "headBlockAtSync": 0,
+                    "lastSyncEpoch": 0.0,
+                    "ageSeconds": None,
+                    "blockLag": None,
+                    "missingGapCount": 0,
+                    "isStale": True,
+                    "isComplete": False,
+                    "totalMatching": 0,
+                    "summary": {"disputedCount": 0, "flaggedCount": 0, "activeCount": 0},
+                    "items": [],
+                }
+
+            indexed_next_id = max(1, int(ckpt["highest_next_trade_id"]))
+            last_scanned_block = int(ckpt["last_scanned_block"])
+            head_block_at_sync = int(ckpt["head_block_at_sync"])
+            last_sync_epoch = float(ckpt["last_sync_epoch"] or 0.0)
+            last_error = str(ckpt["last_error"] or "")
+
+            age_seconds = max(0.0, now - last_sync_epoch) if last_sync_epoch > 0 else float("inf")
+            block_lag = max(0, head_block_at_sync - last_scanned_block)
+            is_stale = (last_sync_epoch <= 0) or (age_seconds > float(max_stale_seconds))
+
+            cnt_row = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt, MAX(trade_id) AS max_id
+                FROM trade_index
+                WHERE chain_id = ? AND contract_address = ?
+                  AND trade_id >= 1 AND trade_id < ?
+                """,
+                (cid, esc, indexed_next_id),
+            ).fetchone()
+            indexed_count = int(cnt_row["cnt"]) if cnt_row else 0
+            expected_count = indexed_next_id - 1
+            missing_gap_count = max(0, expected_count - indexed_count)
+
+            extra_row = conn.execute(
+                """
+                SELECT COUNT(*) AS extra_cnt
+                FROM trade_index
+                WHERE chain_id = ? AND contract_address = ? AND trade_id >= ?
+                """,
+                (cid, esc, indexed_next_id),
+            ).fetchone()
+            extra_count = int(extra_row["extra_cnt"]) if extra_row else 0
+            if extra_count > 0:
+                missing_gap_count += extra_count
+
+            summary_row = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN last_known_state = 3 THEN 1 ELSE 0 END), 0) AS disputed_cnt,
+                    COALESCE(SUM(CASE WHEN flagged = 1 AND last_known_state NOT IN (4, 5) THEN 1 ELSE 0 END), 0) AS flagged_cnt,
+                    COALESCE(SUM(CASE WHEN last_known_state NOT IN (4, 5) THEN 1 ELSE 0 END), 0) AS active_cnt
+                FROM trade_index
+                WHERE chain_id = ? AND contract_address = ?
+                """,
+                (cid, esc),
+            ).fetchone()
+
+            clauses = ["chain_id = ?", "contract_address = ?"]
+            params: list[Any] = [cid, esc]
+            if wallet_norm is not None:
+                clauses.append("(seller = ? OR buyer = ?)")
+                params.extend([wallet_norm, wallet_norm])
+            if mode == "disputed":
+                clauses.append("last_known_state = 3")
+            elif mode == "flagged":
+                clauses.append("flagged = 1 AND last_known_state NOT IN (4, 5)")
+            elif mode == "active":
+                clauses.append("last_known_state NOT IN (4, 5)")
+
+            where_sql = " AND ".join(clauses)
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM trade_index WHERE {where_sql}",
+                params,
+            ).fetchone()
+            total_matching = int(total_row["total"]) if total_row else 0
+
+            rows = conn.execute(
+                f"""
+                SELECT trade_id, seller, buyer, last_known_state, flagged, is_terminal,
+                       created_block, last_event_block, last_verified_block, last_verified_at
+                FROM trade_index
+                WHERE {where_sql}
+                ORDER BY trade_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, eff_limit, eff_offset],
+            ).fetchall()
+
+        is_complete = bool(
+            not last_error
+            and not is_stale
+            and block_lag <= int(max_block_lag)
+            and missing_gap_count == 0
+        )
+
+        return {
+            "chainId": cid,
+            "contractAddress": esc,
+            "deployBlock": int(ckpt["deploy_block"]),
+            "indexedThroughBlock": last_scanned_block,
+            "indexedNextTradeId": indexed_next_id,
+            "headBlockAtSync": head_block_at_sync,
+            "lastSyncEpoch": last_sync_epoch,
+            "ageSeconds": round(age_seconds, 3) if age_seconds != float("inf") else None,
+            "blockLag": block_lag,
+            "missingGapCount": missing_gap_count,
+            "isStale": is_stale,
+            "isComplete": is_complete,
+            "totalMatching": total_matching,
+            "summary": {
+                "disputedCount": int(summary_row["disputed_cnt"]) if summary_row else 0,
+                "flaggedCount": int(summary_row["flagged_cnt"]) if summary_row else 0,
+                "activeCount": int(summary_row["active_cnt"]) if summary_row else 0,
+            },
+            "items": [
+                {
+                    "tradeId": int(r["trade_id"]),
+                    "seller": str(r["seller"]),
+                    "buyer": str(r["buyer"]),
+                    "lastKnownState": int(r["last_known_state"]),
+                    "flagged": bool(r["flagged"]),
+                    "isTerminal": bool(r["is_terminal"]),
+                    "createdBlock": int(r["created_block"]),
+                    "lastEventBlock": int(r["last_event_block"]),
+                    "lastVerifiedBlock": int(r["last_verified_block"]),
+                    "lastVerifiedAt": float(r["last_verified_at"]),
+                }
+                for r in rows
+            ],
+        }
