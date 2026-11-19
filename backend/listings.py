@@ -1045,11 +1045,17 @@ class MarketplaceService:
         *,
         client: Optional[Any] = None,
     ) -> dict[str, Any]:
-        self.expire_stale_reservations(chain_id, escrow_address.lower(), client=client)
+        escrow = escrow_address.lower()
+        now = self.clock()
+        with self.db.read_conn() as conn:
+            has_expired = self._has_expired_unbound_reservations(conn, chain_id, escrow, now)
+        verify_chain = bool(getattr(self.settings, "verify_chain_before_ttl_release", True))
+        if has_expired and (not verify_chain or client is not None):
+            self.expire_stale_reservations(chain_id, escrow, client=client)
         with self.db.read_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM listings WHERE id = ? AND chain_id = ? AND escrow_address = ?",
-                (listing_id, chain_id, escrow_address.lower()),
+                (listing_id, chain_id, escrow),
             ).fetchone()
             if not row:
                 raise MarketplaceError(404, "LISTING_NOT_FOUND", "Không tìm thấy tin đăng.")

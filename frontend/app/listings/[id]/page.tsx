@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -24,8 +24,11 @@ import {
 import {
   computeDepositWeiString,
   computeTotalValueWeiString,
+  createNonOverlappingPollController,
   createPurchaseRequest,
   getListing,
+  isAbortError,
+  POLL_BASE_INTERVAL_MS,
   weiToAvaxString,
   type ListingDto,
   type PurchaseRequestDto,
@@ -55,6 +58,8 @@ export default function ListingDetailPage() {
   } = useAuthSession();
 
   const [listing, setListing] = useState<ListingDto | null>(null);
+  const listingRef = useRef<ListingDto | null>(null);
+  listingRef.current = listing;
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeImageIdx, setActiveImageIdx] = useState(0);
@@ -65,38 +70,130 @@ export default function ListingDetailPage() {
   const [quantity, setQuantity] = useState(1);
   const [buyerNote, setBuyerNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  isSubmittingRef.current = isSubmitting;
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createdRequest, setCreatedRequest] = useState<PurchaseRequestDto | null>(null);
+  const pollControllerRef = useRef<ReturnType<typeof createNonOverlappingPollController> | null>(null);
 
-  const loadListingDetail = useCallback(async () => {
+  const extractGallerySignature = useCallback((item: ListingDto | null): string => {
+    if (!item) return '';
+    if (item.images && item.images.length > 0) {
+      return [...item.images]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((img) => img.uri)
+        .join('|');
+    }
+    return item.primary_image_uri || '';
+  }, []);
+
+  const loadListingDetail = useCallback(
+    async (opts?: { silent?: boolean; signal?: AbortSignal }) => {
+      const silent = Boolean(opts?.silent);
+      if (!listingId) {
+        if (!silent) {
+          setLoadError('Mã tin đăng không hợp lệ.');
+          setIsLoading(false);
+        }
+        return;
+      }
+      if (!silent) {
+        setIsLoading(true);
+        setLoadError(null);
+      }
+      try {
+        const data = await getListing(listingId, { signal: opts?.signal });
+        if (opts?.signal?.aborted) return;
+
+        const prevSig = extractGallerySignature(listingRef.current);
+        const nextSig = extractGallerySignature(data);
+        const nextGalleryLen =
+          data.images && data.images.length > 0
+            ? data.images.length
+            : data.primary_image_uri
+              ? 1
+              : 0;
+
+        setListing(data);
+        setLoadError(null);
+
+        if (!silent || !listingRef.current) {
+          setActiveImageIdx(0);
+          setBrokenImages({});
+        } else if (prevSig !== nextSig) {
+          setActiveImageIdx((prevIdx) =>
+            nextGalleryLen > 0 ? Math.min(prevIdx, nextGalleryLen - 1) : 0
+          );
+          setBrokenImages({});
+        }
+
+        setQuantity((prev) => {
+          if (data.quantity_available > 0 && prev > data.quantity_available) {
+            return data.quantity_available;
+          }
+          return Math.max(1, prev);
+        });
+      } catch (err) {
+        if (isAbortError(err, opts?.signal)) {
+          return;
+        }
+        const msg =
+          err instanceof Error ? err.message : 'Không thể tải thông tin sản phẩm.';
+        if (!silent || !listingRef.current) {
+          setLoadError(msg);
+        }
+        if (silent) {
+          throw err;
+        }
+      } finally {
+        if (!silent && !opts?.signal?.aborted) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [listingId, extractGallerySignature]
+  );
+
+  useEffect(() => {
     if (!listingId) {
       setLoadError('Mã tin đăng không hợp lệ.');
       setIsLoading(false);
       return;
     }
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      const data = await getListing(listingId);
-      setListing(data);
-      setActiveImageIdx(0);
-      setBrokenImages({});
-      setQuantity((prev) => {
-        const maxAvail = Math.max(1, data.quantity_available || 1);
-        return Math.min(Math.max(1, prev), maxAvail);
-      });
-    } catch (err) {
-      setLoadError(
-        err instanceof Error ? err.message : 'Không thể tải thông tin sản phẩm.'
-      );
-    } finally {
-      setIsLoading(false);
+
+    const controller = createNonOverlappingPollController({
+      baseIntervalMs: POLL_BASE_INTERVAL_MS,
+      canPoll: () => !isSubmittingRef.current,
+      runTask: async ({ signal, silent, isCurrent }) => {
+        if (!isCurrent()) return;
+        await loadListingDetail({ silent, signal });
+      },
+    });
+
+    pollControllerRef.current = controller;
+    void controller.trigger({ silent: false });
+
+    const handleVisibilityChange = () => {
+      controller.onVisibilityOrStateChange();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
     }
-  }, [listingId]);
+
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      controller.dispose();
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = null;
+      }
+    };
+  }, [listingId, loadListingDetail]);
 
   useEffect(() => {
-    loadListingDetail();
-  }, [loadListingDetail]);
+    pollControllerRef.current?.onVisibilityOrStateChange();
+  }, [isSubmitting]);
 
   const sellerWallet = listing?.seller_wallet as `0x${string}` | undefined;
   const {
@@ -176,7 +273,7 @@ export default function ListingDetailPage() {
       setCreatedRequest(req);
       setBuyerNote('');
       toast.success('Đã gửi yêu cầu mua thành công! Chờ người bán xác nhận.');
-      await loadListingDetail();
+      await loadListingDetail({ silent: true }).catch(() => {});
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Không thể gửi yêu cầu mua.';
@@ -214,7 +311,13 @@ export default function ListingDetailPage() {
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           <button
             type="button"
-            onClick={loadListingDetail}
+            onClick={() => {
+              if (pollControllerRef.current) {
+                void pollControllerRef.current.trigger({ silent: false });
+              } else {
+                void loadListingDetail({ silent: false });
+              }
+            }}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[#E5E7EB] bg-[#FFFFFF] text-xs font-semibold text-[#17191F] hover:bg-[#F7F8FA] cursor-pointer"
           >
             <RefreshCw className="w-4 h-4" aria-hidden="true" />

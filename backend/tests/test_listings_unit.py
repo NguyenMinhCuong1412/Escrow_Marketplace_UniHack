@@ -843,3 +843,113 @@ class TestMkt002RemediationUnit:
         r_rep = c.post("/listings", json=_listing_payload(sku="FUJI-OK-02"), headers=hdrs)
         assert r_rep.status_code == 401
         assert r_rep.json()["error_code"] == "REPLAY_DETECTED"
+
+
+class TestPhase3T1GetListingTtlGuard:
+    def test_get_listing_skips_expire_and_write_tx_when_no_expired_reservation(self, tmp_path, monkeypatch):
+        clock = _FakeClock(1_700_000_000)
+        mock_chain = _MockMarketplaceChain(initial_next_trade_id=1)
+        s = _settings(tmp_path, reservation_ttl_seconds=1800)
+        app = svc.create_app(s, client=mock_chain)
+        app.state.marketplace.clock = clock
+        c = TestClient(app)
+
+        lid = c.post("/listings", json=_listing_payload(quantity_total=1), headers=_headers(SELLER_A)).json()["id"]
+        req_id = c.post(f"/listings/{lid}/requests", json={"quantity": 1}, headers=_headers(BUYER_1)).json()["id"]
+        assert c.post(f"/requests/{req_id}/decision", json={"action": "accept"}, headers=_headers(SELLER_A)).status_code == 200
+
+        # Advance 10 minutes (still within 30m TTL) -> has_expired is False
+        clock.advance(600)
+
+        expire_calls = 0
+        orig_expire = app.state.marketplace.expire_stale_reservations
+
+        def tracked_expire(*args, **kwargs):
+            nonlocal expire_calls
+            expire_calls += 1
+            return orig_expire(*args, **kwargs)
+
+        write_tx_calls = 0
+        orig_write_tx = app.state.db.write_tx
+
+        def tracked_write_tx(*args, **kwargs):
+            nonlocal write_tx_calls
+            write_tx_calls += 1
+            return orig_write_tx(*args, **kwargs)
+
+        rpc_next_trade_calls = 0
+        orig_next_id = mock_chain.next_trade_id
+
+        def tracked_next_id():
+            nonlocal rpc_next_trade_calls
+            rpc_next_trade_calls += 1
+            return orig_next_id()
+
+        monkeypatch.setattr(app.state.marketplace, "expire_stale_reservations", tracked_expire)
+        monkeypatch.setattr(app.state.db, "write_tx", tracked_write_tx)
+        monkeypatch.setattr(mock_chain, "next_trade_id", tracked_next_id)
+
+        res = c.get(f"/listings/{lid}")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["status"] == "RESERVED"
+        assert body["quantity_reserved"] == 1
+        assert expire_calls == 0
+        assert write_tx_calls == 0
+        assert rpc_next_trade_calls == 0
+
+    def test_get_listing_fail_closed_when_expired_but_client_none_or_rpc_error(self, tmp_path, monkeypatch):
+        clock = _FakeClock(1_700_000_000)
+        # Case A: verify_chain_before_ttl_release=True and client=None -> fail-closed & skips expire call
+        s_none = _settings(tmp_path / "client_none", reservation_ttl_seconds=60, verify_chain_before_ttl_release=True)
+        app_none = svc.create_app(s_none, client=None)
+        app_none.state.marketplace.clock = clock
+        c_none = TestClient(app_none)
+
+        lid1 = c_none.post("/listings", json=_listing_payload(quantity_total=1), headers=_headers(SELLER_A)).json()["id"]
+        req1 = c_none.post(f"/listings/{lid1}/requests", json={"quantity": 1}, headers=_headers(BUYER_1)).json()["id"]
+        assert c_none.post(f"/requests/{req1}/decision", json={"action": "accept"}, headers=_headers(SELLER_A)).status_code == 200
+
+        clock.advance(120)
+
+        expire_calls_none = 0
+        orig_expire_none = app_none.state.marketplace.expire_stale_reservations
+
+        def tracked_expire_none(*args, **kwargs):
+            nonlocal expire_calls_none
+            expire_calls_none += 1
+            return orig_expire_none(*args, **kwargs)
+
+        monkeypatch.setattr(app_none.state.marketplace, "expire_stale_reservations", tracked_expire_none)
+
+        detail_none = c_none.get(f"/listings/{lid1}").json()
+        assert detail_none["status"] == "RESERVED"
+        assert detail_none["quantity_reserved"] == 1
+        assert detail_none["quantity_available"] == 0
+        assert expire_calls_none == 0
+        assert c_none.get(f"/requests/{req1}", headers=_headers(BUYER_1)).json()["status"] == "ACCEPTED"
+
+        # Case B: verify_chain_before_ttl_release=True with RPC client error -> fail-closed
+        mock_err = _MockMarketplaceChain(initial_next_trade_id=1)
+        app_err = svc.create_app(_settings(tmp_path / "rpc_err", reservation_ttl_seconds=60), client=mock_err)
+        app_err.state.marketplace.clock = clock
+        c_err = TestClient(app_err)
+
+        lid2 = c_err.post("/listings", json=_listing_payload(sku="TTL-RPC-ERR", quantity_total=1), headers=_headers(SELLER_A)).json()["id"]
+        req2 = c_err.post(f"/listings/{lid2}/requests", json={"quantity": 1}, headers=_headers(BUYER_1)).json()["id"]
+        assert c_err.post(f"/requests/{req2}/decision", json={"action": "accept"}, headers=_headers(SELLER_A)).status_code == 200
+
+        mock_err.fail_next_trade_id = ChainError("rpc timeout")
+        clock.advance(120)
+        detail_err = c_err.get(f"/listings/{lid2}").json()
+        assert detail_err["status"] == "RESERVED"
+        assert detail_err["quantity_reserved"] == 1
+        assert c_err.get(f"/requests/{req2}", headers=_headers(BUYER_1)).json()["status"] == "ACCEPTED"
+
+        # Case C: Once RPC recovers and confirms no trade on-chain, get_listing releases TTL cleanly
+        mock_err.fail_next_trade_id = None
+        detail_released = c_err.get(f"/listings/{lid2}").json()
+        assert detail_released["status"] == "ACTIVE"
+        assert detail_released["quantity_reserved"] == 0
+        assert detail_released["quantity_available"] == 1
+        assert c_err.get(f"/requests/{req2}", headers=_headers(BUYER_1)).json()["status"] == "EXPIRED"
