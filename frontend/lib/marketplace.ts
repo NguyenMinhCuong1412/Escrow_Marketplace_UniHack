@@ -356,6 +356,10 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
     'Mạng ví hiện tại không khớp với mạng đang phục vụ.',
   BACKEND_UNREACHABLE:
     'Không kết nối được máy chủ Marketplace.',
+  SHARED_BACKEND_UNCONFIGURED:
+    'Chế độ Shared Client chưa được cấu hình SHARED_API_URL. Khi chạy trước Phase 4, hãy truyền SHARED_API_URL=<Ops URL> lúc khởi động Docker hoặc dùng Local Compose (docker compose up --build -d).',
+  SHARED_BACKEND_INVALID_URL:
+    'URL máy chủ Ops (SHARED_API_URL) không hợp lệ; bắt buộc sử dụng địa chỉ http:// hoặc https:// đầy đủ.',
   BFF_MISCONFIGURED:
     'Dịch vụ Marketplace tạm thời chưa sẵn sàng.',
 };

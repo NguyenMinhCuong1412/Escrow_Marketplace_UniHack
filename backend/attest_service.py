@@ -1564,7 +1564,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         target_chain = cid if body.chain_id is None else int(body.chain_id)
         if target_chain != cid:
             raise OpsAuthError(409, "CHAIN_MISMATCH", "Mạng yêu cầu không khớp với mạng Backend đang phục vụ.")
-        allowed = settings.ops_auth_allowed_origins or settings.cors_origins or None
+        allowed = settings.ops_auth_allowed_origins or None
         domain = resolve_request_auth_domain(
             body.domain,
             request.headers.get("origin"),
@@ -1586,7 +1586,7 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
         cid, _, _ = active_chain_context(require_client=False)
         secret = validate_ops_jwt_secret(settings.ops_jwt_secret, settings.attest_api_key)
         target_chain = cid if body.chain_id is None else int(body.chain_id)
-        allowed = settings.ops_auth_allowed_origins or settings.cors_origins or None
+        allowed = settings.ops_auth_allowed_origins or None
         domain = resolve_request_auth_domain(
             body.domain,
             request.headers.get("origin"),
