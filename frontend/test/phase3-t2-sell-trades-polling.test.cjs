@@ -138,7 +138,7 @@ function createFakeEnvironment() {
 // Minimal Faithful React Hook & VDOM Test Harness
 // ---------------------------------------------------------------------------
 
-function createHookHarness() {
+function createHookHarness(onEnter, onExit) {
   let slots = [];
   let hookIdx = 0;
   let pendingEffects = [];
@@ -212,6 +212,7 @@ function createHookHarness() {
 
   function renderOnce() {
     if (!mounted || !currentComponent) return null;
+    const prevToken = typeof onEnter === 'function' ? onEnter() : undefined;
     inRender = true;
     scheduledRender = false;
     try {
@@ -243,6 +244,7 @@ function createHookHarness() {
       }
     } finally {
       inRender = false;
+      if (typeof onExit === 'function') onExit(prevToken);
     }
 
     if (scheduledRender && mounted) {
@@ -434,7 +436,70 @@ function makeTrade(overrides = {}) {
 
 function setupTestContext() {
   const env = createFakeEnvironment();
-  const harness = createHookHarness();
+  let activeSessionCtx = null;
+  const extraSessions = [];
+
+  function createSessionContext(initialOverrides = {}) {
+    const authState = {
+      address: initialOverrides.address !== undefined ? initialOverrides.address : SELLER_WALLET_A,
+      chain: initialOverrides.chain || { id: 31337, name: 'Anvil' },
+      targetChain: initialOverrides.targetChain || { id: 31337, name: 'Anvil' },
+      isAuthenticated: initialOverrides.isAuthenticated !== undefined ? initialOverrides.isAuthenticated : true,
+      isCorrectNetwork: initialOverrides.isCorrectNetwork !== undefined ? initialOverrides.isCorrectNetwork : true,
+      serverSessionActive: initialOverrides.serverSessionActive !== undefined ? initialOverrides.serverSessionActive : true,
+      isSigningIn: Boolean(initialOverrides.isSigningIn),
+      syncCalls: [],
+    };
+    const myTradesState = {
+      trades: initialOverrides.trades || [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetchCount: 0,
+      onRefetch: null,
+    };
+    const routerState = {
+      tab: initialOverrides.tab || 'listings',
+      listingId: initialOverrides.listingId || 'lst-detail-1',
+      replaceCalls: [],
+    };
+
+    const sessionCtx = {
+      authState,
+      myTradesState,
+      routerState,
+      harness: null,
+      stableAuthenticateWithServer: async () => true,
+      stableSyncServerSession: (active, verifiedAddr) => {
+        authState.syncCalls.push({ active, verifiedAddr });
+        const prev = authState.serverSessionActive;
+        authState.serverSessionActive = Boolean(active);
+        if (prev !== authState.serverSessionActive) {
+          sessionCtx.harness.rerender();
+        }
+      },
+    };
+
+    sessionCtx.harness = createHookHarness(
+      () => {
+        const prev = activeSessionCtx;
+        activeSessionCtx = sessionCtx;
+        return prev;
+      },
+      (prev) => {
+        activeSessionCtx = prev;
+      }
+    );
+
+    return sessionCtx;
+  }
+
+  const defaultSession = createSessionContext();
+  activeSessionCtx = defaultSession;
+  const harness = defaultSession.harness;
+  const authState = defaultSession.authState;
+  const myTradesState = defaultSession.myTradesState;
+  const routerState = defaultSession.routerState;
 
   const savedGlobals = {
     setTimeout: globalThis.setTimeout,
@@ -459,55 +524,23 @@ function setupTestContext() {
     removeItem: (k) => storageMap.delete(k),
   };
 
-  const stableSyncServerSession = (active, verifiedAddr) => {
-    authState.syncCalls.push({ active, verifiedAddr });
-    const prev = authState.serverSessionActive;
-    authState.serverSessionActive = Boolean(active);
-    if (prev !== authState.serverSessionActive) {
-      harness.rerender();
-    }
-  };
-  const stableAuthenticateWithServer = async () => true;
-
-  const authState = {
-    address: SELLER_WALLET_A,
-    chain: { id: 31337, name: 'Anvil' },
-    targetChain: { id: 31337, name: 'Anvil' },
-    isAuthenticated: true,
-    isCorrectNetwork: true,
-    serverSessionActive: true,
-    isSigningIn: false,
-    syncCalls: [],
-  };
-
-  const myTradesState = {
-    trades: [],
-    isLoading: false,
-    isError: false,
-    error: null,
-    refetchCount: 0,
-    onRefetch: null,
-  };
-
-  const routerState = {
-    tab: 'listings',
-    replaceCalls: [],
-  };
-
   const toasts = [];
   const capturedTradeListProps = [];
   const realMarketplace = requireRealMarketplace();
 
   const apiMocks = {
     getMyListings: async () => ({ items: [], total: 0, limit: 50, offset: 0 }),
+    getListing: async (id) => makeSampleListing({ id }),
     listPurchaseRequests: async () => ({ items: [], total: 0, limit: 50, offset: 0 }),
     createListing: async (input) => makeSampleListing({ title: input.title, sku: input.sku }),
     updateListing: async (id, input) => makeSampleListing({ id, ...input }),
+    createPurchaseRequest: async (listingId, input) =>
+      makeSampleRequest({ listing_id: listingId, quantity: input?.quantity || 1, buyer_note: input?.buyer_note || '' }),
     decidePurchaseRequest: async (id, input) =>
       makeSampleRequest({ id, status: input.action === 'accept' ? 'ACCEPTED' : 'REJECTED' }),
     cancelPurchaseRequest: async (id) => makeSampleRequest({ id, status: 'CANCELLED' }),
     bindRequestTrade: async (id, input) =>
-      makeSampleRequest({ id, status: 'BOUND', trade_id: input.trade_id || 99, synced_state: 'WaitingDeposit' }),
+      makeSampleRequest({ id, status: 'ESCROW_CREATED', trade_id: input.trade_id || 99, synced_state: 'WaitingDeposit' }),
     syncMarketplaceTrade: async (tradeId) => ({
       trade_id: Number(tradeId),
       synced_state: 'AwaitingEvidence',
@@ -588,11 +621,11 @@ function setupTestContext() {
     Suspense: React.Suspense,
     Fragment: React.Fragment,
     createElement: React.createElement,
-    useState: (...args) => harness.hooksApi.useState(...args),
-    useRef: (...args) => harness.hooksApi.useRef(...args),
-    useMemo: (...args) => harness.hooksApi.useMemo(...args),
-    useCallback: (...args) => harness.hooksApi.useCallback(...args),
-    useEffect: (...args) => harness.hooksApi.useEffect(...args),
+    useState: (...args) => activeSessionCtx.harness.hooksApi.useState(...args),
+    useRef: (...args) => activeSessionCtx.harness.hooksApi.useRef(...args),
+    useMemo: (...args) => activeSessionCtx.harness.hooksApi.useMemo(...args),
+    useCallback: (...args) => activeSessionCtx.harness.hooksApi.useCallback(...args),
+    useEffect: (...args) => activeSessionCtx.harness.hooksApi.useEffect(...args),
   };
 
   const lucideProxy = new Proxy(
@@ -613,18 +646,19 @@ function setupTestContext() {
     }
     if (request === 'next/navigation') {
       return {
+        useParams: () => ({ id: activeSessionCtx.routerState.listingId }),
         useRouter: () => ({
           replace: (url) => {
-            routerState.replaceCalls.push(url);
+            activeSessionCtx.routerState.replaceCalls.push(url);
             const q = url.split('?')[1] || '';
             const params = new URLSearchParams(q);
             const tab = params.get('tab');
-            if (tab) routerState.tab = tab;
+            if (tab) activeSessionCtx.routerState.tab = tab;
           },
         }),
         useSearchParams: () => ({
-          get: (k) => (k === 'tab' ? routerState.tab : null),
-          toString: () => (routerState.tab ? `tab=${routerState.tab}` : ''),
+          get: (k) => (k === 'tab' ? activeSessionCtx.routerState.tab : null),
+          toString: () => (activeSessionCtx.routerState.tab ? `tab=${activeSessionCtx.routerState.tab}` : ''),
         }),
       };
     }
@@ -656,34 +690,51 @@ function setupTestContext() {
     }
     if (request === '@/hooks/useAuthSession') {
       return {
-        useAuthSession: () => ({
-          address: authState.address,
-          chain: authState.chain,
-          targetChain: authState.targetChain,
-          isAuthenticated: authState.isAuthenticated,
-          isCorrectNetwork: authState.isCorrectNetwork,
-          serverSessionActive: authState.serverSessionActive,
-          isSigningIn: authState.isSigningIn,
-          authenticateWithServer: stableAuthenticateWithServer,
-          syncServerSession: stableSyncServerSession,
+        useAuthSession: () => {
+          const cur = activeSessionCtx;
+          return {
+            address: cur.authState.address,
+            chain: cur.authState.chain,
+            targetChain: cur.authState.targetChain,
+            isWalletConnected: Boolean(cur.authState.address),
+            isAuthenticated: cur.authState.isAuthenticated,
+            isCorrectNetwork: cur.authState.isCorrectNetwork,
+            serverSessionActive: cur.authState.serverSessionActive,
+            isSigningIn: cur.authState.isSigningIn,
+            authenticateWithServer: cur.stableAuthenticateWithServer,
+            syncServerSession: cur.stableSyncServerSession,
+          };
+        },
+      };
+    }
+    if (request === '@/hooks/useReputation') {
+      return {
+        useReputation: () => ({
+          score: 85,
+          totalTrades: 3,
+          isLoading: false,
+          isError: false,
         }),
       };
     }
     if (request === '@/hooks/useMyTrades') {
       return {
-        useMyTrades: () => ({
-          trades: myTradesState.trades,
-          totalCreated: myTradesState.trades.length,
-          isLoading: myTradesState.isLoading,
-          isError: myTradesState.isError,
-          error: myTradesState.error,
-          refetch: () => {
-            myTradesState.refetchCount += 1;
-            if (typeof myTradesState.onRefetch === 'function') {
-              return myTradesState.onRefetch();
-            }
-          },
-        }),
+        useMyTrades: () => {
+          const cur = activeSessionCtx;
+          return {
+            trades: cur.myTradesState.trades,
+            totalCreated: cur.myTradesState.trades.length,
+            isLoading: cur.myTradesState.isLoading,
+            isError: cur.myTradesState.isError,
+            error: cur.myTradesState.error,
+            refetch: () => {
+              cur.myTradesState.refetchCount += 1;
+              if (typeof cur.myTradesState.onRefetch === 'function') {
+                return cur.myTradesState.onRefetch();
+              }
+            },
+          };
+        },
       };
     }
     if (request === '@/components/MultiImageUploader') {
@@ -741,9 +792,11 @@ function setupTestContext() {
       return {
         ...realMarketplace,
         getMyListings: (...a) => apiMocks.getMyListings(...a),
+        getListing: (...a) => apiMocks.getListing(...a),
         listPurchaseRequests: (...a) => apiMocks.listPurchaseRequests(...a),
         createListing: (...a) => apiMocks.createListing(...a),
         updateListing: (...a) => apiMocks.updateListing(...a),
+        createPurchaseRequest: (...a) => apiMocks.createPurchaseRequest(...a),
         decidePurchaseRequest: (...a) => apiMocks.decidePurchaseRequest(...a),
         cancelPurchaseRequest: (...a) => apiMocks.cancelPurchaseRequest(...a),
         bindRequestTrade: (...a) => apiMocks.bindRequestTrade(...a),
@@ -761,11 +814,23 @@ function setupTestContext() {
     delete require.cache[abs];
     const mod = require(abs);
     const PageWrapper = mod.default;
-    const suspenseTree = PageWrapper();
-    return suspenseTree.props.children.type;
+    if (relPath.endsWith('sell/page.tsx') || relPath.endsWith('trades/page.tsx')) {
+      const suspenseTree = PageWrapper();
+      return suspenseTree.props.children.type;
+    }
+    return PageWrapper;
+  }
+
+  function createSessionHost(overrides = {}) {
+    const sc = createSessionContext(overrides);
+    extraSessions.push(sc);
+    return sc;
   }
 
   function cleanup() {
+    for (const s of extraSessions) {
+      s.harness.unmount();
+    }
     harness.unmount();
     Module._load = origLoad;
     Module._resolveFilename = origResolve;
@@ -789,6 +854,7 @@ function setupTestContext() {
     capturedTradeListProps,
     realMarketplace,
     loadPageInnerComponent,
+    createSessionHost,
     cleanup,
   };
 }
@@ -1619,4 +1685,386 @@ test('TC-T2-07 Two-session Seller A + Buyer B background sync & P3-T1 ETag cache
   assert.equal(ctx.realMarketplace.computePollDelayMs(0, 10_000, 30_000), 10_000);
   assert.equal(ctx.realMarketplace.computePollDelayMs(1, 10_000, 30_000), 20_000);
   assert.equal(ctx.realMarketplace.computePollDelayMs(2, 10_000, 30_000), 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// TC-T2-08: P3-T1 Regression (a) — Combined Visibility × Modal / Create Tab State Matrix
+// ---------------------------------------------------------------------------
+
+test('TC-T2-08 /sell & /trades Visibility x Modal/Create combined guard (Section 5.1 #9a)', async (t) => {
+  const ctx = setupTestContext();
+  t.after(() => ctx.cleanup());
+
+  let pollCalls = 0;
+  ctx.apiMocks.getMyListings = async () => {
+    pollCalls += 1;
+    return {
+      items: [makeSampleListing({ id: 'lst-vis', title: `VisItem v${pollCalls}`, sku: 'VIS-1' })],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    };
+  };
+  ctx.apiMocks.listPurchaseRequests = async () => ({ items: [], total: 0, limit: 50, offset: 0 });
+
+  const SellerStudio = ctx.loadPageInnerComponent('app/sell/page.tsx');
+  ctx.harness.mount(SellerStudio);
+  await ctx.env.flushMicrotasks();
+  assert.equal(pollCalls, 1);
+
+  // Case 1: Open Edit Modal FIRST, then hide tab, then return tab to 'visible' WHILE modal stays open
+  const editBtn = findButtonByText(ctx.harness.getLatestVdom(), 'Sửa');
+  assert.ok(editBtn);
+  editBtn.props.onClick();
+  ctx.harness.rerender();
+  const titleInput = findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'input' && el.props?.id === 'edit-title'
+  )[0];
+  titleInput.props.onChange({ target: { value: 'Draft During Visible+Hidden Modal' } });
+
+  ctx.env.setVisibility('hidden');
+  await ctx.env.advanceTime(25_000);
+  assert.equal(pollCalls, 1, 'paused while both hidden and modal open');
+
+  // Returning tab to 'visible' MUST stay paused because Edit Modal is still open!
+  ctx.env.setVisibility('visible');
+  await ctx.env.advanceTime(30_000);
+  assert.equal(pollCalls, 1, 'returning to visible MUST NOT resume while edit modal remains open');
+  assert.ok(ctx.harness.getLatestHtml().includes('Draft During Visible+Hidden Modal'));
+
+  // Closing modal while visible now satisfies BOTH guards -> resumes immediately
+  const closeModalBtn = findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'button' && el.props?.['aria-label'] === 'Đóng hộp thoại chỉnh sửa'
+  )[0];
+  closeModalBtn.props.onClick();
+  await ctx.env.flushMicrotasks();
+  assert.equal(pollCalls, 2, 'closing modal while visible resumes immediately');
+
+  // Case 2: Hide tab FIRST, open & close modal while STILL hidden -> MUST stay paused until tab becomes visible
+  ctx.env.setVisibility('hidden');
+  await ctx.env.advanceTime(20_000);
+  assert.equal(pollCalls, 2);
+
+  findButtonByText(ctx.harness.getLatestVdom(), 'Sửa').props.onClick();
+  ctx.harness.rerender();
+  findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'button' && el.props?.['aria-label'] === 'Đóng hộp thoại chỉnh sửa'
+  )[0].props.onClick();
+  await ctx.env.advanceTime(30_000);
+  assert.equal(pollCalls, 2, 'closing modal while tab is still hidden MUST remain paused');
+
+  ctx.env.setVisibility('visible');
+  await ctx.env.flushMicrotasks();
+  assert.equal(pollCalls, 3, 'making tab visible after modal closed resumes cleanly');
+
+  // Case 3: tab='create' combined with visibility hidden -> visible
+  ctx.routerState.tab = 'create';
+  ctx.harness.rerender();
+  const skuInput = findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'input' && el.props?.id === 'create-sku'
+  )[0];
+  skuInput.props.onChange({ target: { value: 'COMBINED-TAB-VIS' } });
+
+  ctx.env.setVisibility('hidden');
+  await ctx.env.advanceTime(20_000);
+  ctx.env.setVisibility('visible');
+  await ctx.env.advanceTime(25_000);
+  assert.equal(pollCalls, 3, 'returning visible while still on create tab MUST keep polling paused');
+  assert.ok(ctx.harness.getLatestHtml().includes('COMBINED-TAB-VIS'));
+
+  ctx.routerState.tab = 'listings';
+  ctx.harness.rerender();
+  await ctx.env.flushMicrotasks();
+  assert.equal(pollCalls, 4, 'exiting create tab while visible resumes polling');
+
+  // Case 4: /trades Visibility x busyId combined guard
+  const buyerSession = ctx.createSessionHost({ address: BUYER_WALLET_B, tab: 'buyer' });
+  let tradesPollCalls = 0;
+  let cancelDeferred = null;
+  ctx.apiMocks.listPurchaseRequests = async ({ role }) => {
+    if (role === 'buyer') tradesPollCalls += 1;
+    return {
+      items: role === 'buyer'
+        ? [makeSampleRequest({ id: 'req-vis-trade', status: 'PENDING' })]
+        : [],
+      total: role === 'buyer' ? 1 : 0,
+      limit: 50,
+      offset: 0,
+    };
+  };
+  ctx.apiMocks.cancelPurchaseRequest = async () => {
+    cancelDeferred = deferred();
+    return cancelDeferred.promise;
+  };
+  const MyTrades = ctx.loadPageInnerComponent('app/trades/page.tsx');
+  buyerSession.harness.mount(MyTrades);
+  await ctx.env.flushMicrotasks();
+  assert.equal(tradesPollCalls, 1);
+
+  const cancelBtn = findButtonByText(buyerSession.harness.getLatestVdom(), 'Hủy yêu cầu');
+  assert.ok(cancelBtn);
+  cancelBtn.props.onClick();
+  await ctx.env.flushMicrotasks();
+  ctx.env.setVisibility('hidden');
+  ctx.env.setVisibility('visible');
+  await ctx.env.advanceTime(25_000);
+  assert.equal(tradesPollCalls, 1, '/trades returning visible while busyId active stays paused');
+
+  ctx.env.setVisibility('hidden');
+  cancelDeferred.resolve(makeSampleRequest({ id: 'req-vis-trade', status: 'CANCELLED' }));
+  await ctx.env.advanceTime(25_000);
+  assert.equal(tradesPollCalls, 1, '/trades finishing busyId while hidden stays paused until visible');
+
+  ctx.env.setVisibility('visible');
+  await ctx.env.flushMicrotasks();
+  assert.equal(tradesPollCalls, 2, '/trades resumes only once both visible and not busy');
+});
+
+// ---------------------------------------------------------------------------
+// TC-T2-09: P3-T1 Regression (b) — Real /listings/[id] Logged-In Buyer Form
+// (quantity, buyerNote, gallery selection & stock-drop clamp across 5s polling)
+// ---------------------------------------------------------------------------
+
+test('TC-T2-09 /listings/[id] P3-T1 regression: preserves logged-in Buyer quantity, buyerNote & gallery across 5s polls and clamps stock drop (Section 5.1 #9b)', async (t) => {
+  const ctx = setupTestContext();
+  t.after(() => ctx.cleanup());
+
+  ctx.authState.address = BUYER_WALLET_B;
+  ctx.routerState.listingId = 'lst-buyer-form';
+
+  let listingVersion = 1;
+  let availableStock = 5;
+  let getListingCalls = 0;
+
+  ctx.apiMocks.getListing = async (id, opts) => {
+    getListingCalls += 1;
+    assert.equal(id, 'lst-buyer-form');
+    assert.ok(opts && opts.signal, 'getListing must forward AbortSignal');
+    if (listingVersion === 'fail503') {
+      throw new ctx.realMarketplace.MarketplaceApiError(503, 'UPSTREAM', 'Transient outage');
+    }
+    return makeSampleListing({
+      id: 'lst-buyer-form',
+      seller_wallet: SELLER_WALLET_A,
+      title: `Millennium Falcon v${listingVersion}`,
+      quantity_total: 5,
+      quantity_available: availableStock,
+      images: [
+        { id: 1, cid: 'QmImg1', uri: 'ipfs://QmImg1', sort_order: 0, is_primary: true },
+        { id: 2, cid: 'QmImg2', uri: 'ipfs://QmImg2', sort_order: 1, is_primary: false },
+      ],
+    });
+  };
+
+  const ListingDetailPage = ctx.loadPageInnerComponent('app/listings/[id]/page.tsx');
+  ctx.harness.mount(ListingDetailPage);
+  await ctx.env.flushMicrotasks();
+
+  assert.equal(getListingCalls, 1);
+  assert.ok(ctx.harness.getLatestHtml().includes('Millennium Falcon v1'));
+
+  // Select gallery image 2, set quantity = 4, and type buyerNote draft
+  const thumb2Btn = findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'button' && String(el.props?.['aria-label'] || '').startsWith('Chọn ảnh 2')
+  )[0];
+  assert.ok(thumb2Btn);
+  thumb2Btn.props.onClick();
+
+  const qtyInput = findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'input' && el.props?.id === 'buyer-quantity-input'
+  )[0];
+  const noteTextarea = findElements(
+    ctx.harness.getLatestVdom(),
+    (el) => el.type === 'textarea' && el.props?.id === 'buyer-note-input'
+  )[0];
+  assert.ok(qtyInput && noteTextarea);
+  qtyInput.props.onChange({ target: { value: '4' } });
+  noteTextarea.props.onChange({ target: { value: 'Keep this BuyerB note across 5s polls' } });
+
+  assert.ok(ctx.harness.getLatestHtml().includes('2 / 2'), 'gallery switched to image 2/2');
+  assert.ok(ctx.harness.getLatestHtml().includes('Tổng giá trị đơn hàng (4 sp)'));
+
+  // Simulate two 5,000 ms P3-T1 background poll ticks updating title without touching stock
+  listingVersion = 2;
+  await ctx.env.advanceTime(5_000);
+  assert.equal(getListingCalls, 2);
+  let htmlAfterPoll = ctx.harness.getLatestHtml();
+  assert.ok(htmlAfterPoll.includes('Millennium Falcon v2'), 'title updated via 5s poll');
+  assert.ok(htmlAfterPoll.includes('2 / 2'), 'gallery index 2/2 preserved across 5s poll');
+  assert.ok(htmlAfterPoll.includes('Tổng giá trị đơn hàng (4 sp)'), 'quantity=4 preserved across 5s poll');
+  assert.ok(htmlAfterPoll.includes('Keep this BuyerB note across 5s polls'), 'buyerNote preserved across 5s poll');
+
+  // Seller updates stock down to 2 -> next 5s poll clamps quantity cleanly to 2 while keeping buyerNote intact
+  listingVersion = 3;
+  availableStock = 2;
+  await ctx.env.advanceTime(5_000);
+  assert.equal(getListingCalls, 3);
+  htmlAfterPoll = ctx.harness.getLatestHtml();
+  assert.ok(htmlAfterPoll.includes('Millennium Falcon v3'));
+  assert.ok(htmlAfterPoll.includes('Tổng giá trị đơn hàng (2 sp)'), 'quantity safely clamped from 4 to 2 when availableStock drops');
+  assert.ok(htmlAfterPoll.includes('Keep this BuyerB note across 5s polls'), 'buyerNote preserved even when quantity clamped');
+
+  // Transient 503 preserves listing details, quantity=2, and buyerNote
+  listingVersion = 'fail503';
+  await ctx.env.advanceTime(5_000);
+  assert.equal(getListingCalls, 4);
+  htmlAfterPoll = ctx.harness.getLatestHtml();
+  assert.ok(htmlAfterPoll.includes('Millennium Falcon v3'), 'existing listing preserved on transient 503 poll');
+  assert.ok(htmlAfterPoll.includes('Tổng giá trị đơn hàng (2 sp)'));
+  assert.ok(htmlAfterPoll.includes('Keep this BuyerB note across 5s polls'));
+});
+
+// ---------------------------------------------------------------------------
+// TC-T2-10: Dual-Mounted Two-Session E2E Flow (SellerA /sell + BuyerB /trades)
+// PENDING -> ACCEPTED -> ESCROW_CREATED + contextsByTradeId['77'].bound === true
+// ---------------------------------------------------------------------------
+
+test('TC-T2-10 Dual-mounted SellerA (/sell) & BuyerB (/trades) full lifecycle sync including Trade #77 bound context (Section 5.1 #8)', async (t) => {
+  const ctx = setupTestContext();
+  t.after(() => ctx.cleanup());
+
+  const sellerHost = ctx.createSessionHost({
+    address: SELLER_WALLET_A,
+    tab: 'requests',
+  });
+  const buyerHost = ctx.createSessionHost({
+    address: BUYER_WALLET_B,
+    tab: 'buyer',
+    trades: [],
+  });
+
+  const db = {
+    listing: makeSampleListing({
+      id: 'lst-e2e-77',
+      seller_wallet: SELLER_WALLET_A,
+      sku: 'E2E-77',
+      title: 'Rare Gundam E2E',
+      quantity_total: 2,
+      quantity_available: 2,
+    }),
+    request: makeSampleRequest({
+      id: 'req-e2e-77',
+      listing_id: 'lst-e2e-77',
+      buyer_wallet: BUYER_WALLET_B,
+      seller_wallet: SELLER_WALLET_A,
+      status: 'PENDING',
+      trade_id: null,
+      listing: {
+        id: 'lst-e2e-77',
+        title: 'Rare Gundam E2E',
+        sku: 'E2E-77',
+        primary_image_uri: 'ipfs://QmPrimary101',
+        status: 'ACTIVE',
+      },
+    }),
+    tradeBound: false,
+  };
+
+  ctx.apiMocks.getMyListings = async () => ({
+    items: [{ ...db.listing }],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  });
+  ctx.apiMocks.listPurchaseRequests = async ({ role }) => {
+    assert.ok(role === 'seller' || role === 'buyer');
+    return {
+      items: [{ ...db.request, listing: { ...db.request.listing } }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    };
+  };
+  ctx.apiMocks.decidePurchaseRequest = async (id, input) => {
+    assert.equal(id, 'req-e2e-77');
+    assert.equal(input.action, 'accept');
+    db.request = {
+      ...db.request,
+      status: 'ACCEPTED',
+      seller_note: input.seller_note || '',
+    };
+    return { ...db.request, listing: { ...db.request.listing } };
+  };
+  ctx.apiMocks.bindRequestTrade = async (id, input) => {
+    assert.equal(id, 'req-e2e-77');
+    assert.ok(input.tx_hash);
+    db.tradeBound = true;
+    db.request = {
+      ...db.request,
+      status: 'ESCROW_CREATED',
+      trade_id: 77,
+      synced_state: 'WaitingDeposit',
+      tx_hash: input.tx_hash,
+    };
+    // Reflect newly created on-chain Trade #77 on Buyer's useMyTrades feed
+    buyerHost.myTradesState.trades = [
+      makeTrade({ id: 77n, seller: SELLER_WALLET_A, buyer: BUYER_WALLET_B, state: 0 }),
+    ];
+    return { ...db.request, listing: { ...db.request.listing } };
+  };
+  ctx.apiMocks.getTradeMarketplaceContext = async (tid) => {
+    assert.equal(Number(tid), 77);
+    return {
+      trade_id: 77,
+      bound: db.tradeBound,
+      listing: db.tradeBound ? { id: 'lst-e2e-77', title: 'Rare Gundam E2E', sku: 'E2E-77' } : null,
+      purchase_request: db.tradeBound ? { id: 'req-e2e-77', status: 'ESCROW_CREATED' } : null,
+    };
+  };
+
+  const SellerStudio = ctx.loadPageInnerComponent('app/sell/page.tsx');
+  const MyTrades = ctx.loadPageInnerComponent('app/trades/page.tsx');
+
+  sellerHost.harness.mount(SellerStudio);
+  buyerHost.harness.mount(MyTrades);
+  await ctx.env.flushMicrotasks();
+
+  assert.ok(sellerHost.harness.getLatestHtml().includes('Chờ xác nhận'));
+  assert.ok(buyerHost.harness.getLatestHtml().includes('Chờ xác nhận'));
+
+  // Step 1: Seller accepts request with seller note
+  const noteInput = findElements(
+    sellerHost.harness.getLatestVdom(),
+    (el) => el.type === 'input' && el.props?.id === 'seller-note-req-e2e-77'
+  )[0];
+  noteInput.props.onChange({ target: { value: 'Accepted in dual E2E' } });
+  const acceptBtn = findButtonByText(sellerHost.harness.getLatestVdom(), 'Xác nhận & Giữ chỗ (30p)');
+  acceptBtn.props.onClick();
+  await ctx.env.flushMicrotasks();
+  assert.ok(sellerHost.harness.getLatestHtml().includes('Đã giữ chỗ · Chờ tạo Escrow'));
+
+  // Step 2: Advance 10,000 ms -> BuyerB automatically sees ACCEPTED + Seller note without manual refresh
+  await ctx.env.advanceTime(10_000);
+  const buyerAcceptedHtml = buyerHost.harness.getLatestHtml();
+  assert.ok(buyerAcceptedHtml.includes('Đã giữ chỗ · Chờ tạo Escrow'), 'BuyerB polls and sees ACCEPTED');
+  assert.ok(buyerAcceptedHtml.includes('Accepted in dual E2E'));
+
+  // Step 3: Seller creates on-chain Escrow & binds Trade #77
+  const bindBtn = findButtonByText(sellerHost.harness.getLatestVdom(), 'Tạo Escrow on-chain & Liên kết');
+  assert.ok(bindBtn);
+  bindBtn.props.onClick();
+  await ctx.env.flushMicrotasks();
+  assert.ok(sellerHost.harness.getLatestHtml().includes('Escrow #77'));
+
+  // Step 4: Advance 10,000 ms -> BuyerB automatically sees ESCROW_CREATED & bound Trade #77 context in escrow tab
+  await ctx.env.advanceTime(10_000);
+  const buyerEscrowReqHtml = buyerHost.harness.getLatestHtml();
+  assert.ok(buyerEscrowReqHtml.includes('Đã tạo Escrow'));
+  assert.ok(buyerEscrowReqHtml.includes('Mở Escrow #77'));
+
+  buyerHost.routerState.tab = 'escrow';
+  buyerHost.harness.rerender();
+  await ctx.env.flushMicrotasks();
+  assert.ok(
+    buyerHost.harness.getLatestHtml().includes('trade-77:Rare Gundam E2E:E2E-77'),
+    'BuyerB escrow tab displays Trade #77 bound context after live dual-session sync'
+  );
+  const latestTradeListCall = ctx.capturedTradeListProps[ctx.capturedTradeListProps.length - 1];
+  assert.equal(latestTradeListCall.contextsByTradeId['77']?.bound, true);
 });
