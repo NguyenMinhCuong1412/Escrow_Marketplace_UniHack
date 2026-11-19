@@ -1,7 +1,7 @@
 # Technical Stack Register
 
 > Trạng thái: `UPDATED (MKT-001..MKT-005) – đồng bộ theo codebase hiện tại`
-> Verified against commit: `bdb1e138cc6ccf0030e784f4eb0c6c18c75660a5` (working tree gồm thay đổi MKT-001..MKT-005 chưa commit — cập nhật hash sau khi merge)
+> Baseline: `origin/main` @ `532686f3c3d9a2429e4a35cce3c6d1f811755caa` (PR #23 — Local Docker + Avalanche Fuji). Chỉ cập nhật tham chiếu baseline theo `CL-03` (FINAL-CLEANUP-002); nội dung bên dưới không thay đổi.
 
 ## Stack đã xác nhận
 
