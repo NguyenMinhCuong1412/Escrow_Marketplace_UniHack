@@ -514,8 +514,7 @@ class TestListingsReadPathOptimization:
         assert accepted["status"] == "ACCEPTED"
         assert accepted["reservation_expires_at"] == now[0] + 1800
 
-        # Advance past 30-minute TTL
-        now[0] += 1805
+        api = TestClient(app)
 
         # Instrument expire_stale_reservations, write_tx, and RPC calls during GET /listings
         expire_calls = 0
@@ -536,35 +535,138 @@ class TestListingsReadPathOptimization:
 
         mkt.expire_stale_reservations = tracked_expire
         app.state.db.write_tx = tracked_write_tx
-        rpc_before = (chain_client.next_calls, chain_client.trade_calls)
 
-        api = TestClient(app)
-        resp = api.get("/listings", params={"status": "ALL"})
-        assert resp.status_code == 200
+        # Phase A: Before TTL expires (even with active ACCEPTED reservation), GET /listings is 100% pure read
+        now[0] += 1799
+        rpc_before = (chain_client.next_calls, chain_client.trade_calls)
+        for _ in range(3):
+            r_active = api.get("/listings", params={"status": "ALL"})
+            assert r_active.status_code == 200
+            assert r_active.json()["items"][0]["status"] == "RESERVED"
+            assert r_active.json()["items"][0]["quantity_available"] == 0
         assert expire_calls == 0
         assert write_tx_calls == 0
         assert (chain_client.next_calls, chain_client.trade_calls) == rpc_before
-        assert resp.json()["items"][0]["status"] == "RESERVED"
 
-        # Restore original methods
-        mkt.expire_stale_reservations = orig_expire
-        app.state.db.write_tx = orig_write_tx
-
-        # Case A: On-chain trade exists (not yet bound) -> reconcile MUST NOT release inventory!
+        # Phase B: Past TTL with NO writes, NO detail GET /listings/{id}, NO reconcile()
+        # Case B1: Unbound on-chain trade exists -> verify_chain_before_ttl_release keeps RESERVED
+        now[0] += 10
         chain_client.unbound_trade_exists = True
-        rec_a = mkt.reconcile(client=chain_client, chain_id=31337, escrow_address=escrow_addr)
-        assert rec_a["expired_released"] == 0
+        r_blocked = api.get("/listings", params={"status": "ACTIVE"})
+        assert r_blocked.status_code == 200 and r_blocked.json()["total"] == 0
         assert api.get("/listings", params={"status": "ALL"}).json()["items"][0]["status"] == "RESERVED"
 
-        # Case B: No matching on-chain trade -> reconcile expires reservation & restores inventory!
+        # Case B2: No unbound trade on-chain -> GET /listings returns ACTIVE & restored stock immediately!
         chain_client.unbound_trade_exists = False
-        rec_b = mkt.reconcile(client=chain_client, chain_id=31337, escrow_address=escrow_addr)
-        assert rec_b["expired_released"] == 1
+        expire_calls = 0
+        write_tx_calls = 0
+        r_released = api.get("/listings", params={"status": "ACTIVE"})
+        assert r_released.status_code == 200
+        assert r_released.json()["total"] == 1
+        released_item = r_released.json()["items"][0]
+        assert released_item["id"] == listing["id"]
+        assert released_item["status"] == "ACTIVE"
+        assert released_item["quantity_reserved"] == 0
+        assert released_item["quantity_available"] == 1
+        assert expire_calls == 1
+        assert write_tx_calls == 1
+
+        # Phase C: Subsequent GET /listings polls return strictly to 0-write / 0-RPC pure reads
+        rpc_steady = (chain_client.next_calls, chain_client.trade_calls)
+        expire_calls = 0
+        write_tx_calls = 0
+        for _ in range(5):
+            r_poll = api.get("/listings")
+            assert r_poll.status_code == 200 and r_poll.json()["total"] == 1
+        assert expire_calls == 0
+        assert write_tx_calls == 0
+        assert (chain_client.next_calls, chain_client.trade_calls) == rpc_steady
+
+        # Phase D: Worker reconcile clears expired reservation proactively -> GET /listings does 0 writes/0 RPC
+        mkt.expire_stale_reservations = orig_expire
+        app.state.db.write_tx = orig_write_tx
+        req2 = mkt.create_purchase_request(
+            buyer,
+            31337,
+            escrow_addr,
+            listing["id"],
+            CreatePurchaseRequest(quantity=1, buyer_note="buy again"),
+            client=chain_client,
+        )
+        assert mkt.decide_request(
+            seller,
+            31337,
+            escrow_addr,
+            req2["id"],
+            DecisionRequest(action="accept"),
+            client=chain_client,
+        )["status"] == "ACCEPTED"
+        now[0] += 1805
+
+        rec_worker = mkt.reconcile(client=chain_client, chain_id=31337, escrow_address=escrow_addr)
+        assert rec_worker["expired_released"] == 1
+
+        mkt.expire_stale_reservations = tracked_expire
+        app.state.db.write_tx = tracked_write_tx
+        rpc_after_worker = (chain_client.next_calls, chain_client.trade_calls)
+        expire_calls = 0
+        write_tx_calls = 0
         active_items = api.get("/listings", params={"status": "ACTIVE"}).json()["items"]
         assert len(active_items) == 1
         assert active_items[0]["id"] == listing["id"]
         assert active_items[0]["quantity_reserved"] == 0
         assert active_items[0]["quantity_available"] == 1
+        assert expire_calls == 0
+        assert write_tx_calls == 0
+        assert (chain_client.next_calls, chain_client.trade_calls) == rpc_after_worker
+
+        mkt.expire_stale_reservations = orig_expire
+        app.state.db.write_tx = orig_write_tx
+
+    def test_get_listings_offline_client_fails_safe_without_write_or_log_churn(self, tmp_path):
+        now = [1_700_000_000]
+        seller = "0x1111111111111111111111111111111111111111"
+        buyer = "0x2222222222222222222222222222222222222222"
+        escrow_addr = "0x9999999999999999999999999999999999999999"
+
+        app = svc.create_app(_unit_settings(tmp_path, escrow_address=escrow_addr, reservation_ttl_seconds=60, verify_chain_before_ttl_release=True))
+        mkt = app.state.marketplace
+        mkt.clock = lambda: now[0]
+
+        listing = mkt.create_listing(
+            seller,
+            31337,
+            escrow_addr,
+            CreateListingRequest(
+                sku="OFFLINE-TTL-01",
+                category="COIN",
+                title="Offline Safe TTL Listing",
+                price_wei=str(10**18),
+                condition="GRADED",
+                quantity_total=1,
+                images=[{"uri": "ipfs://QmOfflineCoin01", "is_primary": True}],
+            ),
+        )
+        req = mkt.create_purchase_request(buyer, 31337, escrow_addr, listing["id"], CreatePurchaseRequest(quantity=1))
+        mkt.decide_request(seller, 31337, escrow_addr, req["id"], DecisionRequest(action="accept"))
+
+        now[0] += 120
+        expire_calls = 0
+        orig_expire = mkt.expire_stale_reservations
+
+        def tracked_expire(*a, **kw):
+            nonlocal expire_calls
+            expire_calls += 1
+            return orig_expire(*a, **kw)
+
+        mkt.expire_stale_reservations = tracked_expire
+        api = TestClient(app)
+        resp = api.get("/listings", params={"status": "ALL"})
+        assert resp.status_code == 200
+        assert resp.json()["items"][0]["status"] == "RESERVED"
+        assert resp.json()["items"][0]["quantity_reserved"] == 1
+        assert expire_calls == 0
+        mkt.expire_stale_reservations = orig_expire
 
 
 # ---------------------------------------------------------------------------
