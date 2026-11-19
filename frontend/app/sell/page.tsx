@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { formatEther } from 'viem';
@@ -29,11 +29,15 @@ import {
 import {
   bindRequestTrade,
   createListing,
+  createNonOverlappingPollController,
   decidePurchaseRequest,
   getMyListings,
+  isAbortError,
   LISTING_CATEGORIES,
   LISTING_CONDITIONS,
   listPurchaseRequests,
+  MarketplaceApiError,
+  POLL_MAX_BACKOFF_MS,
   updateListing,
   weiToAvaxString,
   type ListingCategory,
@@ -64,6 +68,12 @@ import { MultiImageUploader, type UploadedImageItem } from '@/components/MultiIm
 
 type SellTab = 'create' | 'listings' | 'requests';
 
+const SELL_POLL_INTERVAL_MS = 10_000;
+
+function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof MarketplaceApiError && err.status === 401;
+}
+
 function formatRemainingTtl(expiresAtSec: number | null, nowSec: number): string {
   if (!expiresAtSec) return 'Không giới hạn';
   const diff = Math.floor(expiresAtSec - nowSec);
@@ -90,22 +100,39 @@ const SellerStudioContent: React.FC = () => {
 
   const {
     address,
+    chain,
+    isAuthenticated,
     isCorrectNetwork,
     targetChain,
     serverSessionActive,
     isSigningIn,
     authenticateWithServer,
+    syncServerSession,
   } = useAuthSession();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const { signMessageAsync } = useSignMessage();
   const { switchChain } = useSwitchChain();
 
-  // Data state
+  const effectiveChainId = chain?.id ?? targetChain?.id ?? configuredChainId;
+  const isSessionReady = Boolean(
+    address &&
+      isAuthenticated &&
+      serverSessionActive &&
+      !isSigningIn
+  );
+  const currentSessionKey =
+    isSessionReady && address
+      ? `${address.toLowerCase()}::${effectiveChainId}`
+      : '';
+
+  // Data state (tagged by loadedSessionKey to guarantee zero stale cross-wallet render frames)
+  const [loadedSessionKey, setLoadedSessionKey] = useState('');
   const [myListings, setMyListings] = useState<ListingDto[]>([]);
   const [sellerRequests, setSellerRequests] = useState<PurchaseRequestDto[]>([]);
-  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [transientPollError, setTransientPollError] = useState<string | null>(null);
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
   // Create form state
@@ -144,6 +171,47 @@ const SellerStudioContent: React.FC = () => {
   const [manualTxHashMap, setManualTxHashMap] = useState<Record<string, string>>({});
   const [requestStepStatus, setRequestStepStatus] = useState<Record<string, string>>({});
 
+  // Synchronously scope rendered data to currentSessionKey (0 stale renders on wallet/chain switch or logout)
+  const hasMatchingSessionData = Boolean(
+    isSessionReady &&
+      currentSessionKey !== '' &&
+      loadedSessionKey === currentSessionKey
+  );
+  const visibleMyListings = hasMatchingSessionData ? myListings : [];
+  const visibleSellerRequests = hasMatchingSessionData ? sellerRequests : [];
+  const visiblePendingBindMap = hasMatchingSessionData ? pendingBindMap : {};
+  const visibleEditingListing = hasMatchingSessionData ? editingListing : null;
+  const visibleDataError = hasMatchingSessionData ? dataError : null;
+  const visibleTransientPollError = hasMatchingSessionData ? transientPollError : null;
+
+  // Polling & session-safety refs
+  const hasOpenManualTx = Object.values(manualTxOpenMap).some(Boolean);
+  const canPollSell = Boolean(
+    isSessionReady &&
+      activeTab !== 'create' &&
+      !isCreating &&
+      editingListing === null &&
+      !isSavingEdit &&
+      mutatingListingId === null &&
+      processingReqId === null &&
+      !hasOpenManualTx
+  );
+
+  const sessionEpochRef = useRef(0);
+  const sessionValidRef = useRef(false);
+  const currentSessionKeyRef = useRef(currentSessionKey);
+  currentSessionKeyRef.current = currentSessionKey;
+  const activeAddressRef = useRef<string | null>(address ? address.toLowerCase() : null);
+  activeAddressRef.current = address ? address.toLowerCase() : null;
+  const hasLoadedOnceRef = useRef(false);
+  const canPollSellRef = useRef(canPollSell);
+  canPollSellRef.current = canPollSell;
+  const prevCanPollSellRef = useRef(canPollSell);
+  const lastActiveSessionKeyRef = useRef('');
+  const pollControllerRef = useRef<ReturnType<typeof createNonOverlappingPollController> | null>(null);
+  const syncServerSessionRef = useRef(syncServerSession);
+  syncServerSessionRef.current = syncServerSession;
+
   useEffect(() => {
     const id = setInterval(() => {
       setNowSec(Math.floor(Date.now() / 1000));
@@ -151,40 +219,188 @@ const SellerStudioContent: React.FC = () => {
     return () => clearInterval(id);
   }, []);
 
-  const refreshPendingBinds = useCallback((reqs: PurchaseRequestDto[]) => {
+  const buildPendingBinds = useCallback((reqs: PurchaseRequestDto[]) => {
     const map: Record<string, PendingBindTradeRecord | null> = {};
     for (const r of reqs) {
       map[r.id] = getPendingBindTrade(configuredChainId, r.id);
     }
-    setPendingBindMap(map);
+    return map;
   }, []);
 
-  const loadSellerData = useCallback(async () => {
-    setIsLoadingData(true);
+  const clearSessionScopedState = useCallback(() => {
+    hasLoadedOnceRef.current = false;
+    setLoadedSessionKey('');
+    setMyListings((prev) => (prev.length === 0 ? prev : []));
+    setSellerRequests((prev) => (prev.length === 0 ? prev : []));
+    setPendingBindMap((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setSellerNotes((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setManualTxOpenMap((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setManualTxHashMap((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setRequestStepStatus((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setEditingListing(null);
+    setCreateError(null);
     setDataError(null);
-    try {
-      const [listingsRes, reqsRes] = await Promise.all([
-        getMyListings({ limit: 50, sort: 'newest' }),
-        listPurchaseRequests({ role: 'seller', limit: 50 }),
-      ]);
-      setMyListings(listingsRes.items || []);
-      const reqItems = reqsRes.items || [];
-      setSellerRequests(reqItems);
-      refreshPendingBinds(reqItems);
-    } catch (err) {
-      setDataError(
-        err instanceof Error
-          ? err.message
-          : 'Không thể tải dữ liệu Kênh người bán.'
-      );
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, [refreshPendingBinds]);
+    setTransientPollError(null);
+    setIsLoadingData(false);
+  }, []);
 
+  const handleExpiredSession = useCallback(() => {
+    const hadSessionOrData =
+      sessionValidRef.current ||
+      hasLoadedOnceRef.current ||
+      currentSessionKeyRef.current !== '';
+    sessionValidRef.current = false;
+    sessionEpochRef.current += 1;
+    pollControllerRef.current?.dispose();
+    pollControllerRef.current = null;
+    clearSessionScopedState();
+    if (hadSessionOrData) {
+      syncServerSessionRef.current(false);
+    }
+  }, [clearSessionScopedState]);
+
+  const fetchSellerSnapshot = useCallback(
+    async (opts?: { silent?: boolean; signal?: AbortSignal }) => {
+      const silent = Boolean(opts?.silent);
+      const capturedEpoch = sessionEpochRef.current;
+      const capturedSessionKey = currentSessionKeyRef.current;
+      const capturedWallet = activeAddressRef.current;
+
+      if (!sessionValidRef.current || !capturedSessionKey || !capturedWallet) {
+        if (!silent) setIsLoadingData(false);
+        return;
+      }
+
+      const isSameActiveSession = () =>
+        sessionValidRef.current &&
+        !opts?.signal?.aborted &&
+        capturedEpoch === sessionEpochRef.current &&
+        capturedSessionKey === currentSessionKeyRef.current &&
+        capturedWallet === activeAddressRef.current;
+
+      if (!silent) {
+        setIsLoadingData(true);
+        setDataError(null);
+        setTransientPollError(null);
+      }
+
+      try {
+        const [listingsRes, reqsRes] = await Promise.all([
+          getMyListings({ limit: 50, sort: 'newest' }, { signal: opts?.signal }),
+          listPurchaseRequests({ role: 'seller', limit: 50 }, { signal: opts?.signal }),
+        ]);
+
+        if (!isSameActiveSession()) return;
+
+        const reqItems = reqsRes.items || [];
+        setLoadedSessionKey(capturedSessionKey);
+        setMyListings(listingsRes.items || []);
+        setSellerRequests(reqItems);
+        setPendingBindMap(buildPendingBinds(reqItems));
+        setDataError(null);
+        setTransientPollError(null);
+        hasLoadedOnceRef.current = true;
+      } catch (err) {
+        if (isAbortError(err, opts?.signal) || !isSameActiveSession()) {
+          return;
+        }
+        if (isUnauthorizedError(err)) {
+          handleExpiredSession();
+          return;
+        }
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Không thể tải dữ liệu Kênh người bán.';
+        if (silent && hasLoadedOnceRef.current) {
+          setTransientPollError(msg);
+          throw err;
+        }
+        setLoadedSessionKey(capturedSessionKey);
+        setDataError(msg);
+        if (silent) {
+          throw err;
+        }
+      } finally {
+        if (!silent && !opts?.signal?.aborted && capturedEpoch === sessionEpochRef.current) {
+          setIsLoadingData(false);
+        }
+      }
+    },
+    [buildPendingBinds, handleExpiredSession]
+  );
+
+  // Session lifecycle & 10s non-overlapping poll controller
   useEffect(() => {
-    loadSellerData();
-  }, [loadSellerData, address]);
+    if (!isSessionReady || !currentSessionKey) {
+      sessionValidRef.current = false;
+      sessionEpochRef.current += 1;
+      lastActiveSessionKeyRef.current = '';
+      prevCanPollSellRef.current = false;
+      pollControllerRef.current?.dispose();
+      pollControllerRef.current = null;
+      clearSessionScopedState();
+      return;
+    }
+
+    if (lastActiveSessionKeyRef.current && lastActiveSessionKeyRef.current !== currentSessionKey) {
+      clearSessionScopedState();
+    }
+    lastActiveSessionKeyRef.current = currentSessionKey;
+    sessionEpochRef.current += 1;
+    sessionValidRef.current = true;
+    prevCanPollSellRef.current = canPollSellRef.current;
+
+    const controller = createNonOverlappingPollController({
+      baseIntervalMs: SELL_POLL_INTERVAL_MS,
+      maxBackoffMs: POLL_MAX_BACKOFF_MS,
+      canPoll: () => canPollSellRef.current && sessionValidRef.current,
+      runTask: async ({ signal, silent, isCurrent }) => {
+        if (!isCurrent() || !sessionValidRef.current) return;
+        await fetchSellerSnapshot({ silent, signal });
+      },
+    });
+
+    pollControllerRef.current = controller;
+    void controller.trigger({ silent: false });
+
+    const handleVisibilityChange = () => {
+      controller.onVisibilityOrStateChange();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      sessionValidRef.current = false;
+      sessionEpochRef.current += 1;
+      controller.dispose();
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = null;
+      }
+    };
+  }, [isSessionReady, currentSessionKey, clearSessionScopedState, fetchSellerSnapshot]);
+
+  // Pause/resume polling cleanly on edge transitions (tab create, modal, signing, manual tx recovery)
+  useEffect(() => {
+    const wasPollable = prevCanPollSellRef.current;
+    prevCanPollSellRef.current = canPollSell;
+    if (wasPollable !== canPollSell) {
+      pollControllerRef.current?.onVisibilityOrStateChange();
+    }
+  }, [canPollSell]);
+
+  const handleManualRefresh = useCallback(() => {
+    if (!isSessionReady || !sessionValidRef.current) return;
+    if (pollControllerRef.current) {
+      void pollControllerRef.current.trigger({ silent: false });
+    } else {
+      void fetchSellerSnapshot({ silent: false });
+    }
+  }, [isSessionReady, fetchSellerSnapshot]);
 
   const pricePreview = buildSellableAvaxPreview(priceAvax);
   const editPricePreview = buildSellableAvaxPreview(editPriceAvax);
@@ -215,6 +431,7 @@ const SellerStudioContent: React.FC = () => {
       return;
     }
 
+    const capturedEpoch = sessionEpochRef.current;
     setIsCreating(true);
     try {
       const created = await createListing({
@@ -236,15 +453,21 @@ const SellerStudioContent: React.FC = () => {
         );
       }
 
+      if (capturedEpoch !== sessionEpochRef.current) return;
       setSku('');
       setTitle('');
       setPriceAvax('');
       setQuantityTotal(1);
       setDescription('');
       setImages([]);
-      await loadSellerData();
+      setMyListings((prev) => [created, ...prev.filter((x) => x.id !== created.id)]);
       setActiveTab('listings');
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
+      if (capturedEpoch !== sessionEpochRef.current) return;
       const msg =
         err instanceof Error ? err.message : 'Không thể tạo tin đăng mới.';
       setCreateError(msg);
@@ -293,9 +516,11 @@ const SellerStudioContent: React.FC = () => {
       return;
     }
 
+    const capturedEpoch = sessionEpochRef.current;
+    const targetListingId = editingListing.id;
     setIsSavingEdit(true);
     try {
-      await updateListing(editingListing.id, {
+      const updated = await updateListing(targetListingId, {
         sku: normalizedSku,
         category: editCategory,
         condition: editCondition,
@@ -305,10 +530,18 @@ const SellerStudioContent: React.FC = () => {
         quantity_total: editQtyTotal,
         images: editImages.map((img) => ({ uri: img.uri, is_primary: img.is_primary })),
       });
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.success('Đã cập nhật tin đăng.');
+      setMyListings((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item))
+      );
       setEditingListing(null);
-      await loadSellerData();
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.error(err instanceof Error ? err.message : 'Cập nhật thất bại.');
     } finally {
       setIsSavingEdit(false);
@@ -326,9 +559,11 @@ const SellerStudioContent: React.FC = () => {
     ) {
       return;
     }
+    const capturedEpoch = sessionEpochRef.current;
     setMutatingListingId(listing.id);
     try {
-      await updateListing(listing.id, { status: nextStatus });
+      const updated = await updateListing(listing.id, { status: nextStatus });
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.success(
         nextStatus === 'PAUSED'
           ? 'Đã tạm ẩn tin đăng khỏi chợ.'
@@ -336,8 +571,15 @@ const SellerStudioContent: React.FC = () => {
             ? 'Đã mở bán lại tin đăng.'
             : 'Đã hủy tin đăng.'
       );
-      await loadSellerData();
+      setMyListings((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item))
+      );
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.error(err instanceof Error ? err.message : 'Không thể đổi trạng thái tin đăng.');
     } finally {
       setMutatingListingId(null);
@@ -345,19 +587,28 @@ const SellerStudioContent: React.FC = () => {
   };
 
   const handleDecision = async (reqId: string, action: 'accept' | 'reject') => {
+    const capturedEpoch = sessionEpochRef.current;
     setProcessingReqId(reqId);
     try {
-      await decidePurchaseRequest(reqId, {
+      const updatedReq = await decidePurchaseRequest(reqId, {
         action,
         seller_note: sellerNotes[reqId]?.trim() || undefined,
       });
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.success(
         action === 'accept'
           ? 'Đã xác nhận và giữ chỗ sản phẩm (30 phút) để tạo Escrow!'
           : 'Đã từ chối yêu cầu mua.'
       );
-      await loadSellerData();
+      setSellerRequests((prev) =>
+        prev.map((r) => (r.id === updatedReq.id ? updatedReq : r))
+      );
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
+      if (capturedEpoch !== sessionEpochRef.current) return;
       toast.error(err instanceof Error ? err.message : 'Không thể xử lý yêu cầu.');
     } finally {
       setProcessingReqId(null);
@@ -366,7 +617,7 @@ const SellerStudioContent: React.FC = () => {
 
   const resolvePrimaryImageUri = (req: PurchaseRequestDto): string => {
     if (req.listing?.primary_image_uri) return req.listing.primary_image_uri;
-    const matched = myListings.find((l) => l.id === req.listing_id);
+    const matched = visibleMyListings.find((l) => l.id === req.listing_id);
     return matched?.primary_image_uri || '';
   };
 
@@ -426,6 +677,7 @@ const SellerStudioContent: React.FC = () => {
     txHash: `0x${string}`,
     knownTradeId?: number
   ) => {
+    const capturedEpoch = sessionEpochRef.current;
     let extractedTradeId = knownTradeId;
     if (!extractedTradeId && publicClient) {
       try {
@@ -436,7 +688,9 @@ const SellerStudioContent: React.FC = () => {
         const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
         if (receipt.status !== 'success') {
           clearPendingBindTrade(configuredChainId, req.id);
-          setPendingBindMap((prev) => ({ ...prev, [req.id]: null }));
+          if (capturedEpoch === sessionEpochRef.current) {
+            setPendingBindMap((prev) => ({ ...prev, [req.id]: null }));
+          }
           throw new Error('Giao dịch tạo Escrow bị revert trên blockchain.');
         }
         const parsedId = extractTradeCreatedIdFromReceipt(
@@ -473,7 +727,19 @@ const SellerStudioContent: React.FC = () => {
     });
 
     clearPendingBindTrade(configuredChainId, req.id);
+    if (capturedEpoch !== sessionEpochRef.current) return;
     setPendingBindMap((prev) => ({ ...prev, [req.id]: null }));
+    setManualTxOpenMap((prev) => {
+      const copy = { ...prev };
+      delete copy[req.id];
+      return copy;
+    });
+    setManualTxHashMap((prev) => {
+      const copy = { ...prev };
+      delete copy[req.id];
+      return copy;
+    });
+    setSellerRequests((prev) => prev.map((r) => (r.id === bound.id ? bound : r)));
 
     if (bound.trade_id) {
       await finalizeBoundTradeAiRegistration(req, bound.trade_id);
@@ -481,7 +747,6 @@ const SellerStudioContent: React.FC = () => {
         `Đã liên kết thành công giao dịch Escrow #${bound.trade_id}!`
       );
     }
-    await loadSellerData();
   };
 
   const handleCreateOnChainAndBind = async (req: PurchaseRequestDto) => {
@@ -545,6 +810,10 @@ const SellerStudioContent: React.FC = () => {
 
       await performBindAndRegister(req, txHash);
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
       notifyWalletActionError(err, 'Lỗi tạo/liên kết Escrow', {
         duration: 7000,
         context: 'CreateEscrowAndBind',
@@ -587,6 +856,10 @@ const SellerStudioContent: React.FC = () => {
     try {
       await performBindAndRegister(req, txHash, knownTradeId ?? existing?.tradeId);
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        handleExpiredSession();
+        return;
+      }
       notifyWalletActionError(err, 'Chưa thể liên kết lại giao dịch', {
         duration: 7000,
         context: 'RetryBindTrade',
@@ -601,14 +874,14 @@ const SellerStudioContent: React.FC = () => {
     }
   };
 
-  const pendingReqCount = sellerRequests.filter(
+  const pendingReqCount = visibleSellerRequests.filter(
     (r) => r.status === 'PENDING' || r.status === 'ACCEPTED'
   ).length;
 
   const filteredListings =
     statusFilter === 'ALL'
-      ? myListings
-      : myListings.filter((item) => item.status === statusFilter);
+      ? visibleMyListings
+      : visibleMyListings.filter((item) => item.status === statusFilter);
 
   return (
     <div className="space-y-6">
@@ -630,7 +903,7 @@ const SellerStudioContent: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={loadSellerData}
+            onClick={handleManualRefresh}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[#E5E7EB] bg-[#F7F8FA] hover:bg-[#FFFFFF] text-xs font-semibold text-[#17191F] cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
@@ -701,7 +974,7 @@ const SellerStudioContent: React.FC = () => {
           }`}
         >
           <Package className="w-4 h-4" aria-hidden="true" />
-          <span>Quản lý tin đăng ({myListings.length})</span>
+          <span>Quản lý tin đăng ({visibleMyListings.length})</span>
         </button>
 
         <button
@@ -717,7 +990,7 @@ const SellerStudioContent: React.FC = () => {
         >
           <Inbox className="w-4 h-4" aria-hidden="true" />
           <span>
-            Yêu cầu mua đến ({sellerRequests.length})
+            Yêu cầu mua đến ({visibleSellerRequests.length})
             {pendingReqCount > 0 ? ` · ${pendingReqCount} cần xử lý` : ''}
           </span>
         </button>
@@ -738,21 +1011,40 @@ const SellerStudioContent: React.FC = () => {
         </button>
       </div>
 
-      {dataError && (
+      {visibleDataError && (
         <div
           role="alert"
           className="rounded-2xl border border-red-200 bg-red-50 p-4 flex items-center justify-between gap-3 text-xs sm:text-sm text-red-700"
         >
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>{dataError}</span>
+            <span>{visibleDataError}</span>
           </div>
           <button
             type="button"
-            onClick={loadSellerData}
+            onClick={handleManualRefresh}
             className="px-3 py-1.5 rounded-xl bg-red-700 text-white text-xs font-semibold cursor-pointer"
           >
             Thử lại
+          </button>
+        </div>
+      )}
+
+      {!visibleDataError && visibleTransientPollError && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-2xl border border-[#F0B44D]/60 bg-[#F0B44D]/15 px-4 py-2.5 flex items-center justify-between gap-3 text-xs text-[#7A4B00]"
+        >
+          <span>
+            Tự động đồng bộ nền tạm gián đoạn ({visibleTransientPollError}). Dữ liệu hiện tại được giữ nguyên và sẽ tự thử lại.
+          </span>
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            className="px-2.5 py-1 rounded-lg border border-[#7A4B00]/30 bg-white/70 hover:bg-white text-[11px] font-semibold cursor-pointer shrink-0"
+          >
+            Thử ngay
           </button>
         </div>
       )}
@@ -1152,7 +1444,7 @@ const SellerStudioContent: React.FC = () => {
             <div className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-8 text-center text-sm text-[#525866]">
               Đang tải yêu cầu mua hàng...
             </div>
-          ) : sellerRequests.length === 0 ? (
+          ) : visibleSellerRequests.length === 0 ? (
             <div className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-10 text-center space-y-2">
               <Inbox className="w-8 h-8 mx-auto text-[#525866]" aria-hidden="true" />
               <p className="text-base font-bold text-[#17191F]">
@@ -1164,10 +1456,10 @@ const SellerStudioContent: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-4">
-              {sellerRequests.map((req) => {
+              {visibleSellerRequests.map((req) => {
                 const badge = REQUEST_STATUS_BADGES[req.status];
                 const isBusy = processingReqId === req.id;
-                const pendingBind = pendingBindMap[req.id];
+                const pendingBind = visiblePendingBindMap[req.id];
                 const stepMsg = requestStepStatus[req.id];
                 const manualOpen = Boolean(manualTxOpenMap[req.id]);
 
@@ -1408,7 +1700,7 @@ const SellerStudioContent: React.FC = () => {
       )}
 
       {/* EDIT LISTING MODAL */}
-      {editingListing && (
+      {visibleEditingListing && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1418,7 +1710,7 @@ const SellerStudioContent: React.FC = () => {
           <div className="w-full max-w-2xl rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-5 sm:p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-3">
               <h2 id="edit-listing-title" className="text-lg font-bold text-[#17191F]">
-                Chỉnh sửa tin đăng ({editingListing.sku})
+                Chỉnh sửa tin đăng ({visibleEditingListing.sku})
               </h2>
               <button
                 type="button"
@@ -1517,12 +1809,12 @@ const SellerStudioContent: React.FC = () => {
                 </div>
                 <div className="space-y-1">
                   <label htmlFor="edit-qty" className="block text-xs font-semibold text-[#17191F]">
-                    Tổng số lượng (tối thiểu {Math.max(1, editingListing.quantity_reserved + editingListing.quantity_sold)})
+                    Tổng số lượng (tối thiểu {Math.max(1, visibleEditingListing.quantity_reserved + visibleEditingListing.quantity_sold)})
                   </label>
                   <input
                     id="edit-qty"
                     type="number"
-                    min={Math.max(1, editingListing.quantity_reserved + editingListing.quantity_sold)}
+                    min={Math.max(1, visibleEditingListing.quantity_reserved + visibleEditingListing.quantity_sold)}
                     max={10000}
                     required
                     value={editQtyTotal}
