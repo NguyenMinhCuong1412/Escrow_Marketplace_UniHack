@@ -50,13 +50,71 @@ export function isSharedBffMode(): boolean {
   return isSharedAuthBffMode();
 }
 
+export class SharedBackendConfigError extends Error {
+  readonly status = 503;
+  readonly errorCode: 'SHARED_BACKEND_UNCONFIGURED' | 'SHARED_BACKEND_INVALID_URL';
+
+  constructor(
+    errorCode: 'SHARED_BACKEND_UNCONFIGURED' | 'SHARED_BACKEND_INVALID_URL',
+    message: string
+  ) {
+    super(message);
+    this.name = 'SharedBackendConfigError';
+    this.errorCode = errorCode;
+  }
+}
+
+export type BackendTargetResult =
+  | { ok: true; url: string; sharedMode: boolean }
+  | {
+      ok: false;
+      errorCode: 'SHARED_BACKEND_UNCONFIGURED' | 'SHARED_BACKEND_INVALID_URL';
+      message: string;
+    };
+
+export function resolveBackendTarget(): BackendTargetResult {
+  if (isSharedBffMode()) {
+    const raw = (process.env.SHARED_API_URL || '').trim().replace(/\/+$/, '');
+    if (!raw) {
+      return {
+        ok: false,
+        errorCode: 'SHARED_BACKEND_UNCONFIGURED',
+        message:
+          'Chế độ Shared Client chưa được cấu hình SHARED_API_URL (máy chủ Ops Phase 4 chưa thiết lập hoặc chưa nhập URL).',
+      };
+    }
+    try {
+      const parsed = new URL(raw);
+      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.host) {
+        return {
+          ok: false,
+          errorCode: 'SHARED_BACKEND_INVALID_URL',
+          message: 'Cấu hình SHARED_API_URL phải là URL http:// hoặc https:// đầy đủ.',
+        };
+      }
+    } catch {
+      return {
+        ok: false,
+        errorCode: 'SHARED_BACKEND_INVALID_URL',
+        message: 'Cấu hình SHARED_API_URL không hợp lệ.',
+      };
+    }
+    return { ok: true, url: raw, sharedMode: true };
+  }
+
+  const rawLocal = (process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || '').trim();
+  if (!rawLocal || rawLocal.startsWith('/')) {
+    return { ok: true, url: 'http://127.0.0.1:8000', sharedMode: false };
+  }
+  return { ok: true, url: rawLocal.replace(/\/+$/, ''), sharedMode: false };
+}
+
 export function backendBaseUrl(): string {
-  const url =
-    process.env.SHARED_API_URL ||
-    process.env.BACKEND_URL ||
-    process.env.NEXT_PUBLIC_BACKEND_URL ||
-    'http://127.0.0.1:8000';
-  return url.replace(/\/+$/, '');
+  const target = resolveBackendTarget();
+  if (!target.ok) {
+    throw new SharedBackendConfigError(target.errorCode, target.message);
+  }
+  return target.url;
 }
 
 export function configuredChainId(): number {
@@ -197,29 +255,70 @@ export function buildSignedProxyHeaders(params: {
   return { ok: true, headers };
 }
 
+function firstHeaderValue(raw: string | null): string {
+  return (raw || '').split(',')[0].trim();
+}
+
+function isTrueEnvFlag(name: string): boolean {
+  const raw = (process.env[name] || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function expectedCodespacesHost(): string | null {
+  const name = (process.env.CODESPACE_NAME || '').trim().toLowerCase();
+  if (!name) return null;
+  const domain = (process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev')
+    .trim()
+    .toLowerCase();
+  return `${name}-3000.${domain}`;
+}
+
+/**
+ * Chỉ tin các header X-Forwarded-* khi proxy đứng trước được khai báo đáng tin cậy
+ * (`TRUST_PROXY_HEADERS=true` / `TRUST_PROXY_FORWARDED_FOR=true`) hoặc là hostname
+ * GitHub Codespaces khớp chính xác `CODESPACE_NAME`.
+ */
+export function isTrustProxyEnabled(request?: Request): boolean {
+  if (isTrueEnvFlag('TRUST_PROXY_HEADERS') || isTrueEnvFlag('TRUST_PROXY_FORWARDED_FOR')) {
+    return true;
+  }
+  const csHost = expectedCodespacesHost();
+  if (csHost && request) {
+    const fwdHost = firstHeaderValue(request.headers.get('x-forwarded-host')).toLowerCase();
+    const hostHdr = firstHeaderValue(request.headers.get('host')).toLowerCase();
+    if (fwdHost === csHost || hostHdr === csHost) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveAllowedOrigins(request: Request): Set<string> {
   const allowed = new Set<string>();
   const reqUrl = new URL(request.url);
   allowed.add(reqUrl.origin.toLowerCase());
 
-  const hostHeader = (
-    request.headers.get('x-forwarded-host') ||
-    request.headers.get('host') ||
-    ''
-  )
-    .split(',')[0]
-    .trim()
-    .toLowerCase();
-  if (hostHeader) {
-    const protoHeader = (
-      request.headers.get('x-forwarded-proto') ||
-      reqUrl.protocol.replace(/:$/, '') ||
-      'http'
-    )
-      .split(',')[0]
-      .trim()
-      .toLowerCase();
-    allowed.add(`${protoHeader}://${hostHeader}`);
+  const trusted = isTrustProxyEnabled(request);
+  const directProto = reqUrl.protocol.replace(/:$/, '').toLowerCase() || 'http';
+  const forwardedHost = trusted
+    ? firstHeaderValue(request.headers.get('x-forwarded-host')).toLowerCase()
+    : '';
+  const forwardedProto = trusted
+    ? firstHeaderValue(request.headers.get('x-forwarded-proto')).toLowerCase()
+    : '';
+
+  const effectiveProto =
+    forwardedProto === 'http' || forwardedProto === 'https' ? forwardedProto : directProto;
+
+  const directHost = firstHeaderValue(request.headers.get('host')).toLowerCase();
+  if (directHost) {
+    allowed.add(`${effectiveProto}://${directHost}`);
+    if (directProto !== effectiveProto) {
+      allowed.add(`${directProto}://${directHost}`);
+    }
+  }
+  if (forwardedHost) {
+    allowed.add(`${effectiveProto}://${forwardedHost}`);
   }
 
   const extra = process.env.ALLOWED_ORIGINS || '';
@@ -233,6 +332,70 @@ function resolveAllowedOrigins(request: Request): Set<string> {
     }
   }
   return allowed;
+}
+
+/**
+ * Xác định origin chuẩn của client đang gọi tới Next.js BFF (chống spoof X-Forwarded-* và Origin lạ).
+ */
+export function resolveRequestOrigin(request: Request): string {
+  const allowed = resolveAllowedOrigins(request);
+  const origin = (request.headers.get('origin') || '').trim();
+  if (origin) {
+    try {
+      const normalized = new URL(origin).origin.toLowerCase();
+      if (allowed.has(normalized)) {
+        return normalized;
+      }
+    } catch {
+      // Fallback sang host đã xác thực
+    }
+  }
+
+  const reqUrl = new URL(request.url);
+  const trusted = isTrustProxyEnabled(request);
+  const directProto = reqUrl.protocol.replace(/:$/, '').toLowerCase() || 'http';
+  const forwardedProto = trusted
+    ? firstHeaderValue(request.headers.get('x-forwarded-proto')).toLowerCase()
+    : '';
+  const proto =
+    forwardedProto === 'http' || forwardedProto === 'https' ? forwardedProto : directProto;
+
+  const hostHeader = (
+    (trusted ? firstHeaderValue(request.headers.get('x-forwarded-host')) : '') ||
+    firstHeaderValue(request.headers.get('host')) ||
+    reqUrl.host ||
+    ''
+  ).toLowerCase();
+
+  return hostHeader ? `${proto}://${hostHeader}` : reqUrl.origin.toLowerCase();
+}
+
+/**
+ * Xác định cờ `Secure` cho cookie `escrow_auth_session`:
+ * - Trên HTTPS (request.url https: hoặc X-Forwarded-Proto: https từ trusted proxy)
+ *   BẮT BUỘC `Secure = true`; tuyệt đối không cho `COOKIE_SECURE=false` tắt `Secure`.
+ * - Trên plain HTTP local Docker (`127.0.0.1:3000` / `localhost:3000`): mặc định `false`
+ *   (hoặc `true` chỉ khi đặt `COOKIE_SECURE=true`) để cookie hoạt động nhất quán trên mọi trình duyệt.
+ */
+export function shouldUseSecureCookie(request?: Request): boolean {
+  const cookieSecureEnv = (process.env.COOKIE_SECURE || '').trim().toLowerCase();
+  const forceOnHttp = cookieSecureEnv === 'true' || cookieSecureEnv === '1';
+  if (!request) {
+    return forceOnHttp;
+  }
+
+  const reqUrl = new URL(request.url);
+  const isDirectHttps = reqUrl.protocol === 'https:';
+  const trusted = isTrustProxyEnabled(request);
+  const forwardedProto = trusted
+    ? firstHeaderValue(request.headers.get('x-forwarded-proto')).toLowerCase()
+    : '';
+  const isHttps = isDirectHttps || forwardedProto === 'https';
+
+  if (isHttps) {
+    return true;
+  }
+  return forceOnHttp;
 }
 
 /**
@@ -395,7 +558,10 @@ export function validateIdempotencyKeyHeader(
   return { ok: true, key: trimmed };
 }
 
-function extractClientIpHeader(request: Request): string | null {
+export function extractClientIpHeader(request: Request): string | null {
+  if (!isTrustProxyEnabled(request)) {
+    return null;
+  }
   const xff = request.headers.get('x-forwarded-for');
   if (xff) {
     const first = xff.split(',')[0].trim();
@@ -416,8 +582,12 @@ async function executeBackendFetch(
     ifNoneMatch?: string | null;
   }
 ): Promise<NextResponse> {
+  const target = resolveBackendTarget();
+  if (!target.ok) {
+    return bffError(503, target.errorCode, target.message);
+  }
   const qs = init.query && init.query.toString() ? `?${init.query.toString()}` : '';
-  const targetUrl = `${backendBaseUrl()}${upstreamPath}${qs}`;
+  const targetUrl = `${target.url}${upstreamPath}${qs}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), BFF_TIMEOUT_MS);

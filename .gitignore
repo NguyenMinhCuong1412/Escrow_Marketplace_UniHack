@@ -3,6 +3,8 @@
 .env.*
 *.env.local
 !.env.example
+!.env.shared.example
+!.env.ops.example
 
 # Python
 .venv/

@@ -12,7 +12,13 @@ import {
   isSharedAuthBffMode,
   verifySessionFromRequest,
 } from '@/lib/auth-session';
-import { backendBaseUrl, configuredChainId } from '@/lib/marketplace-bff';
+import {
+  bffError,
+  configuredChainId,
+  resolveBackendTarget,
+  resolveRequestOrigin,
+  shouldUseSecureCookie,
+} from '@/lib/marketplace-bff';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,33 +26,7 @@ export const dynamic = 'force-dynamic';
 const AUTH_UPSTREAM_TIMEOUT_MS = 15_000;
 
 function resolveClientDomain(request: Request): string {
-  const origin = (request.headers.get('origin') || '').trim();
-  if (origin) {
-    try {
-      return new URL(origin).origin.toLowerCase();
-    } catch {
-      // Fallback to host
-    }
-  }
-  const reqUrl = new URL(request.url);
-  const host = (
-    request.headers.get('x-forwarded-host') ||
-    request.headers.get('host') ||
-    reqUrl.host ||
-    ''
-  )
-    .split(',')[0]
-    .trim()
-    .toLowerCase();
-  const proto = (
-    request.headers.get('x-forwarded-proto') ||
-    reqUrl.protocol.replace(/:$/, '') ||
-    'http'
-  )
-    .split(',')[0]
-    .trim()
-    .toLowerCase();
-  return host ? `${proto}://${host}` : reqUrl.origin.toLowerCase();
+  return resolveRequestOrigin(request);
 }
 
 // In-memory nonce store (nonce -> { address, expiresAt })
@@ -84,10 +64,12 @@ export async function GET(request: Request) {
     const chainIdParam = Number(reqUrl.searchParams.get('chainId') || defaultChainId);
 
     if (!addressParam) {
+      const targetCheck = resolveBackendTarget();
       return NextResponse.json({
         authenticated: false,
         targetChainId: Number.isFinite(chainIdParam) ? chainIdParam : defaultChainId,
         mode: 'shared',
+        sharedBackendConfigured: targetCheck.ok,
       });
     }
 
@@ -105,11 +87,16 @@ export async function GET(request: Request) {
       );
     }
 
+    const target = resolveBackendTarget();
+    if (!target.ok) {
+      return bffError(503, target.errorCode, target.message);
+    }
+
     const domain = resolveClientDomain(request);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AUTH_UPSTREAM_TIMEOUT_MS);
     try {
-      const upstreamRes = await fetch(`${backendBaseUrl()}/auth/challenge`, {
+      const upstreamRes = await fetch(`${target.url}/auth/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: domain },
         body: JSON.stringify({
@@ -215,11 +202,15 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    const target = resolveBackendTarget();
+    if (!target.ok) {
+      return bffError(503, target.errorCode, target.message);
+    }
     const domain = resolveClientDomain(request);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AUTH_UPSTREAM_TIMEOUT_MS);
     try {
-      const upstreamRes = await fetch(`${backendBaseUrl()}/auth/verify`, {
+      const upstreamRes = await fetch(`${target.url}/auth/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: domain },
         body: JSON.stringify({
@@ -315,7 +306,7 @@ export async function POST(request: Request) {
     }
     throw err;
   }
-  const isProd = process.env.NODE_ENV === 'production';
+  const secureCookie = shouldUseSecureCookie(request);
 
   const response = NextResponse.json({
     ok: true,
@@ -326,7 +317,7 @@ export async function POST(request: Request) {
 
   response.cookies.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isProd,
+    secure: secureCookie,
     sameSite: 'lax',
     path: '/',
     maxAge: SESSION_EXPIRY_MS / 1000,
@@ -338,10 +329,13 @@ export async function POST(request: Request) {
 /**
  * DELETE: Clears the authenticated session cookie.
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const secureCookie = shouldUseSecureCookie(request);
   const response = NextResponse.json({ ok: true, authenticated: false });
   response.cookies.set(SESSION_COOKIE_NAME, '', {
     httpOnly: true,
+    secure: secureCookie,
+    sameSite: 'lax',
     expires: new Date(0),
     path: '/',
   });

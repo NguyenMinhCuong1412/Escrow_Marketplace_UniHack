@@ -1,0 +1,57 @@
+# Zero-Config Shared Client Docker Compose
+# Usage:
+#   SHARED_API_URL=https://ops.example.com docker compose -f compose.shared.yaml up --build -d
+# Pre-Phase-4 (chưa có Ops URL chính thức):
+#   docker compose -f compose.shared.yaml up --build -d
+#   -> Homepage (/) vẫn mở bình thường (HTTP 200) và hiển thị hướng dẫn cấu hình SHARED_API_URL (BFF trả 503 SHARED_BACKEND_UNCONFIGURED).
+#   -> Khi có Ops URL, chỉ cần khởi động lại với SHARED_API_URL=... (KHÔNG cần rebuild image).
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
+        NEXT_PUBLIC_ESCROW_ADDRESS: ${NEXT_PUBLIC_ESCROW_ADDRESS:-0x19D053c84941411888f5b9e40c854365fdd4eb00}
+        NEXT_PUBLIC_TOKEN_ADDRESS: ${NEXT_PUBLIC_TOKEN_ADDRESS:-0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78}
+        NEXT_PUBLIC_DEPLOY_BLOCK: ${NEXT_PUBLIC_DEPLOY_BLOCK:-60980241}
+        NEXT_PUBLIC_BACKEND_URL: /_backend
+        NEXT_PUBLIC_IPFS_GATEWAY: ${NEXT_PUBLIC_IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
+        NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-3a8170812b534d0ff9d794f19a901d64}
+    ports:
+      - "${CLIENT_PORT:-3000}:3000"
+    environment:
+      CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
+      NEXT_PUBLIC_CHAIN_ID: ${NEXT_PUBLIC_CHAIN_ID:-43113}
+      NEXT_PUBLIC_ESCROW_ADDRESS: ${NEXT_PUBLIC_ESCROW_ADDRESS:-0x19D053c84941411888f5b9e40c854365fdd4eb00}
+      NEXT_PUBLIC_TOKEN_ADDRESS: ${NEXT_PUBLIC_TOKEN_ADDRESS:-0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78}
+      NEXT_PUBLIC_DEPLOY_BLOCK: ${NEXT_PUBLIC_DEPLOY_BLOCK:-60980241}
+      NEXT_PUBLIC_BACKEND_URL: /_backend
+      NEXT_PUBLIC_IPFS_GATEWAY: ${NEXT_PUBLIC_IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
+      BFF_AUTH_MODE: shared
+      SHARED_API_URL: ${SHARED_API_URL:-}
+      CLIENT_SECRETS_FILE: /run/client-secrets/session.env
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      TRADE_INDEX_ENABLED: ${TRADE_INDEX_ENABLED:-true}
+    volumes:
+      - client_runtime_secrets:/run/client-secrets
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  client_runtime_secrets:

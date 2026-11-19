@@ -34,11 +34,25 @@ Escrow Marketplace là sàn giao dịch đồ sưu tầm nhiều người dùng 
 - **Điều kiện hoàn cọc sạch (`resolveClean()`):** Chỉ chạy được khi trade ở trạng thái `Attested`, **không bị flag** (`!flagged`) và **đã quá `disputeDeadline`** mà không có khiếu nại; bất kỳ địa chỉ nào cũng có thể gọi để hoàn lại tiền cọc hai bên (+1 điểm uy tín), **không** thanh toán giá trị món hàng.
 - **Giới hạn quyền AI Agent & Trọng tài (`onlyAgent` / `onlyOwner`):** AI Agent chỉ được gọi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence` để ghi nhận kết quả kiểm tra và gắn cờ cảnh báo. Mọi tranh chấp (`flagged=true` hoặc khiếu nại qua `fileComplaint()`) do **Owner / Arbiter (một ví EOA)** xử lý on-chain qua `resolveDispute()`.
 
-## 3. Hướng dẫn chạy môi trường Local
+## 3. Hướng dẫn chạy môi trường Local & Shared Docker
 
-### Cách 1: Chạy nhanh bằng Docker Compose *(Khuyên dùng — xem chi tiết tại [RUN_LOCAL_BEGINNER.md](RUN_LOCAL_BEGINNER.md))*
+### Cách 1A: Shared Marketplace Client Zero-Config (`compose.shared.yaml`)
 
-Chỉ cần **Git** và **Docker** (tự động cấu hình hợp đồng Fuji `43113` và tự sinh an toàn `SESSION_SECRET` / `ATTEST_API_KEY` trong Docker volume `runtime_secrets` khi khởi chạy lần đầu):
+Người dùng cuối chỉ cần **Git** và **Docker** — **không cần** cấu hình Database, Backend Worker, `PINATA_JWT`, `AGENT_PRIVATE_KEY`, `ATTEST_API_KEY` hay `OPS_JWT_SECRET`:
+
+```bash
+git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
+cd Escrow_Marketplace_UniHack
+SHARED_API_URL=https://<ops-backend-url> docker compose -f compose.shared.yaml up --build -d
+```
+
+- Khi chưa có URL Ops chính thức trước Phase 4 (`SHARED_API_URL` để trống), `docker compose -f compose.shared.yaml up --build -d` vẫn khởi chạy UI khỏe mạnh (`http://127.0.0.1:3000`, HTTP `200`) và hiển thị hướng dẫn rõ ràng thay cho lỗi `503 SHARED_BACKEND_UNCONFIGURED`. Khi có URL Ops, chỉ cần chạy lại với `SHARED_API_URL=...` **không cần `--build` lại**. *(Trước Final Release ở Phase 4, `SHARED_API_URL` HTTPS mặc định đáng tin cậy sẽ được cấu hình sẵn cho Client, hoàn toàn không chứa secrets).*
+- Phiên người dùng dùng cookie `HttpOnly; SameSite=Lax` với `SESSION_SECRET` tự sinh cục bộ trong volume `client_runtime_secrets` (tách biệt tuyệt đối khỏi mọi bí mật Ops).
+- Đội vận hành triển khai Ops Server bằng [`compose.ops.yaml`](compose.ops.yaml) và [`.env.ops.example`](.env.ops.example) (`backend` API keyless + `agent-worker` tách riêng giữ `AGENT_PRIVATE_KEY`; tuyệt đối không đưa ví Owner lên server).
+
+### Cách 1B: Chạy trọn bộ Local/Dev độc lập (`compose.yaml` — xem chi tiết tại [RUN_LOCAL_BEGINNER.md](RUN_LOCAL_BEGINNER.md))
+
+Chỉ cần **Git** và **Docker** (tự động cấu hình hợp đồng Fuji `43113`, Backend SQLite cục bộ và tự sinh an toàn `SESSION_SECRET` / `ATTEST_API_KEY` trong Docker volume `runtime_secrets` khi khởi chạy lần đầu):
 
 ```bash
 git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
