@@ -1550,7 +1550,7 @@ class MarketplaceDB:
                 SELECT
                     COALESCE(SUM(CASE WHEN last_known_state = 3 THEN 1 ELSE 0 END), 0) AS disputed_cnt,
                     COALESCE(SUM(CASE WHEN flagged = 1 AND last_known_state NOT IN (4, 5) THEN 1 ELSE 0 END), 0) AS flagged_cnt,
-                    COALESCE(SUM(CASE WHEN last_known_state NOT IN (4, 5) THEN 1 ELSE 0 END), 0) AS active_cnt
+                    COALESCE(SUM(CASE WHEN (is_terminal = 0 OR last_known_state NOT IN (4, 5)) THEN 1 ELSE 0 END), 0) AS active_cnt
                 FROM trade_index
                 WHERE chain_id = ? AND contract_address = ?
                 """,
@@ -1567,7 +1567,7 @@ class MarketplaceDB:
             elif mode == "flagged":
                 clauses.append("flagged = 1 AND last_known_state NOT IN (4, 5)")
             elif mode == "active":
-                clauses.append("last_known_state NOT IN (4, 5)")
+                clauses.append("(is_terminal = 0 OR last_known_state NOT IN (4, 5))")
 
             where_sql = " AND ".join(clauses)
             total_row = conn.execute(

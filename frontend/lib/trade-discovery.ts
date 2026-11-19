@@ -870,19 +870,43 @@ export function createPublicClientTradeAdapter(opts: {
           throwIfAborted(signal);
           let successCount = 0;
           let firstFailure: unknown = null;
+          const failedIds: number[] = [];
           results.forEach((res, idx) => {
             if (res.status === 'success' && res.result !== undefined) {
               successCount += 1;
               const parsed = parseRawTrade(ids[idx], res.result);
               if (parsed) out.set(ids[idx], parsed);
-            } else if (!firstFailure) {
-              firstFailure = res.error ?? new Error('multicall getTrade failed');
+            } else {
+              failedIds.push(ids[idx]);
+              if (!firstFailure) {
+                firstFailure = res.error ?? new Error(`multicall getTrade(${ids[idx]}) failed`);
+              }
             }
           });
           if (results.length > 0 && successCount === 0 && firstFailure) {
             throw firstFailure instanceof Error
               ? firstFailure
               : new Error(String(firstFailure));
+          }
+          if (failedIds.length > 0) {
+            // Never return partial multicall results silently as complete; recover via direct readContract or fail explicitly
+            const retried = await Promise.all(
+              failedIds.map(async (tid) => {
+                throwIfAborted(signal);
+                const raw = await publicClient.readContract({
+                  address: escrowAddress,
+                  abi: escrowAbi,
+                  functionName: 'getTrade',
+                  args: [BigInt(tid)],
+                });
+                return { tid, raw };
+              })
+            );
+            throwIfAborted(signal);
+            for (const item of retried) {
+              const parsed = parseRawTrade(item.tid, item.raw);
+              if (parsed) out.set(item.tid, parsed);
+            }
           }
           return out;
         } catch (err) {

@@ -939,3 +939,122 @@ test('TC-T3-09: Live hook useMyTrades & AdminDisputePage behavioral isolation an
     global.document = origDoc;
   }
 });
+
+test('TC-T3-10: Index lag 1-20 blocks never misses old trade turning Disputed/Flagged & partial multicall rejects', async () => {
+  discovery.clearTradeDiscoveryCache();
+
+  // Case A: Index lags 10 blocks behind head (60,999,990 vs 61,000,000).
+  // Old trades #15 (Attested, unflagged) & #20 (AwaitingEvidence, unflagged) transitioned on-chain at block 60,999,995
+  // to Disputed (#15) and Flagged Attested (#20), while index DB still holds stale pre-lag states.
+  const tradesMap = new Map();
+  for (let id = 1; id <= 30; id += 1) {
+    if (id === 15) {
+      tradesMap.set(id, makeTrade(id, WALLET_A, WALLET_B, 3, false)); // Live: Disputed!
+    } else if (id === 20) {
+      tradesMap.set(id, makeTrade(id, WALLET_A, WALLET_C, 2, true)); // Live: Attested + Flagged!
+    } else if (id === 25) {
+      tradesMap.set(id, makeTrade(id, WALLET_B, WALLET_C, 3, true)); // Live: Reorg-reverted within 12-block window
+    } else {
+      tradesMap.set(id, makeTrade(id, WALLET_B, WALLET_C, 4, false));
+    }
+  }
+
+  const staleDbOverrides = new Map([
+    [15, { state: 2, flagged: false, isTerminal: false }], // index didn't see Disputed yet
+    [20, { state: 1, flagged: false, isTerminal: false }], // index didn't see Flagged yet
+    [25, { state: 4, flagged: false, isTerminal: false }], // recent terminal inside 12-block lookback (is_terminal=0)
+  ]);
+
+  const mock = createMockChainAndIndex({
+    chainId: 43113,
+    tradesMap,
+    headBlock: 61000000,
+    indexedThroughBlock: 60999990, // lag = 10 blocks (within 1..20)
+    staleDbStateOverrides: staleDbOverrides,
+  });
+
+  // Override fetchIndexPage filter=active to mirror db.py (is_terminal=0 OR state not in 4,5)
+  const baseFetch = mock.adapter.fetchIndexPage;
+  mock.adapter.fetchIndexPage = async (params) => {
+    const resp = await baseFetch(params);
+    if (resp.ok && resp.data && params.filter === 'active') {
+      const has25 = resp.data.items.some((x) => x.tradeId === 25);
+      if (!has25) {
+        resp.data.items.push({
+          tradeId: 25,
+          seller: WALLET_B,
+          buyer: WALLET_C,
+          lastKnownState: 4,
+          flagged: false,
+          isTerminal: false,
+        });
+        resp.data.totalMatching += 1;
+        resp.data.summary.activeCount += 1;
+      }
+    }
+    return resp;
+  };
+
+  const adminRes = await discovery.discoverAdminTrades(mock.adapter, {
+    activeTab: 'disputed',
+    page: 1,
+    isAuthenticated: true,
+  });
+
+  assert.deepEqual(
+    adminRes.disputedTrades.map((t) => Number(t.id)),
+    [25, 15],
+    'Admin must capture old trade #15 turning Disputed & recent #25 during 1-20 block index lag'
+  );
+  assert.deepEqual(
+    adminRes.flaggedTrades.map((t) => Number(t.id)),
+    [25, 20],
+    'Admin must capture old trade #20 turning Flagged during 1-20 block index lag'
+  );
+
+  // Case B: Partial multicall failure MUST recover via readContract OR throw cleanly (never treat partial as complete)
+  let readContractFallbackCount = 0;
+  const recoveringClient = {
+    getBlockNumber: async () => 61000000n,
+    multicall: async () => [
+      { status: 'success', result: [WALLET_A, WALLET_B, 1n, 1n, 1n, 1n, ZERO_B32, ZERO_B32, ZERO_B32, ZERO_B32, 0, false, 1n, 1n, 1n, 4] },
+      { status: 'failure', error: new Error('slot failure') },
+    ],
+    readContract: async ({ functionName, args }) => {
+      if (functionName === 'getTrade') {
+        readContractFallbackCount += 1;
+        assert.equal(Number(args[0]), 2);
+        return [WALLET_A, WALLET_C, 1n, 1n, 1n, 1n, ZERO_B32, ZERO_B32, ZERO_B32, ZERO_B32, 90, true, 1n, 1n, 1n, 3];
+      }
+      return 3n;
+    },
+  };
+  const partialAdapter = discovery.createPublicClientTradeAdapter({
+    chainId: 43113,
+    escrowAddress: ESCROW_ADDR,
+    escrowAbi: [],
+    publicClient: recoveringClient,
+  });
+  const recoveredMap = await partialAdapter.readTradesBatch([1, 2]);
+  assert.equal(readContractFallbackCount, 1);
+  assert.equal(recoveredMap.get(2).state, 3, 'Must recover failed multicall slot rather than dropping trade #2');
+
+  const failingClient = {
+    ...recoveringClient,
+    readContract: async ({ functionName }) => {
+      if (functionName === 'getTrade') throw new Error('persistent RPC failure on slot 2');
+      return 3n;
+    },
+  };
+  const strictAdapter = discovery.createPublicClientTradeAdapter({
+    chainId: 43113,
+    escrowAddress: ESCROW_ADDR,
+    escrowAbi: [],
+    publicClient: failingClient,
+  });
+  await assert.rejects(
+    strictAdapter.readTradesBatch([1, 2]),
+    /persistent RPC failure/,
+    'Must reject rather than silently returning incomplete partial batch as complete'
+  );
+});

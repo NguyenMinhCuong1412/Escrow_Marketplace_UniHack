@@ -578,6 +578,61 @@ def test_http_trades_index_auth_pagination_and_runtime_kill_switch(tmp_path: Pat
     assert r_disabled.json()["error_code"] == "TRADE_INDEX_DISABLED"
 
 
+def test_active_filter_includes_unfinalized_recent_terminal_within_reorg_window(tmp_path: Path):
+    """Trade moi chuyển Resolved trong cửa sổ 12 block (is_terminal=0) phải giữ trong filter=active
+    để /admin không bỏ sót nếu reorg hoặc trễ 1-20 block."""
+    db = MarketplaceDB(tmp_path / "lag_reverify.db")
+    now = time.time()
+    db.upsert_trade_index_entries_and_checkpoint(
+        31337,
+        ESCROW_ADDR,
+        [
+            {
+                "trade_id": 1,
+                "seller": SELLER_A,
+                "buyer": BUYER_B,
+                "last_known_state": TradeState.Resolved.value,
+                "flagged": False,
+                "is_terminal": True,
+                "created_block": 10,
+                "last_event_block": 20,
+                "last_verified_block": 100,
+            },
+            {
+                "trade_id": 2,
+                "seller": SELLER_A,
+                "buyer": BUYER_B,
+                "last_known_state": TradeState.Resolved.value,
+                "flagged": False,
+                "is_terminal": False,  # resolved inside 12-block lookback window
+                "created_block": 50,
+                "last_event_block": 95,
+                "last_verified_block": 100,
+            },
+            {
+                "trade_id": 3,
+                "seller": SELLER_A,
+                "buyer": BUYER_C,
+                "last_known_state": TradeState.Attested.value,
+                "flagged": False,
+                "is_terminal": False,
+                "created_block": 60,
+                "last_event_block": 90,
+                "last_verified_block": 100,
+            },
+        ],
+        deploy_block=0,
+        last_scanned_block=100,
+        last_scanned_block_hash="0x" + "11" * 32,
+        head_block_at_sync=100,
+        highest_next_trade_id=4,
+        sync_epoch=now,
+    )
+    active_res = db.query_trade_index(31337, ESCROW_ADDR, filter_mode="active", now_epoch=now)
+    assert [it["tradeId"] for it in active_res["items"]] == [3, 2]
+    assert active_res["summary"]["activeCount"] == 2
+
+
 # ---------------------------------------------------------------------------
 # 7. Live Anvil Test: Direct createTrade + Reorg via evm_snapshot/evm_revert
 # ---------------------------------------------------------------------------
