@@ -5,6 +5,7 @@
 !.env.example
 !.env.shared.example
 !.env.ops.example
+!frontend/.env.local.example
 
 # Python
 .venv/
