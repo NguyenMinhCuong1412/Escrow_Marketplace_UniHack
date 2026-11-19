@@ -339,7 +339,7 @@ Khi chạy `docker compose up --build -d` trực tiếp:
   - `CollectibleToken (CDU)`: `0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78`
 - `init-secrets` **tự sinh an toàn** 2 khóa nội bộ ngẫu nhiên độc lập (`SESSION_SECRET` và `ATTEST_API_KEY`, dài `>= 32` ký tự) lưu vào Docker volume `runtime_secrets`.
 - Hỗ trợ duyệt Marketplace, tạo/kết nối ví, xác thực EIP-191, tạo tin/yêu cầu mua trong SQLite và xem giao dịch on-chain trên Fuji.
-- **Giới hạn khi thiếu credentials:** Upload ảnh qua `/api/pin` báo lỗi `503` (fail-closed, không dùng mock CID trên Fuji); AI Auto-Agent `attest()` và `nonce-qr.png` báo thiếu `AGENT_PRIVATE_KEY` (`503`).
+- **Giới hạn khi thiếu credentials:** Upload ảnh qua `/api/pin` báo lỗi `503` (fail-closed, không dùng mock CID trên Fuji); AI Verify/`attest()` báo thiếu `AGENT_PRIVATE_KEY` (`503`, fail-closed). Mã QR nonce (`/trade/{id}/nonce-qr.png`) vẫn hoạt động vì chỉ đọc dữ liệu on-chain.
 
 ### Chế độ 2 — Bật upload ảnh IPFS (Pinata) và/hoặc AI Auto-Agent `attest()`
 Trên máy local, tạo `.env` từ [`.env.example`](.env.example):
@@ -371,7 +371,7 @@ Sau khi `docker compose ps` báo cả `backend` và `frontend` đều **`healthy
 - **Website:** `http://127.0.0.1:3000` (hoặc `http://localhost:3000` trên local/macOS; `https://<CODESPACE_NAME>-3000.app.github.dev` trên Codespaces)
 - **API Backend Health:** `http://127.0.0.1:8000/health` *(hoặc `<frontend-url>/_backend/health` trong Codespaces)*
 
-*(Lưu ý: Nếu chưa điền `AGENT_PRIVATE_KEY`, `/health` vẫn trả JSON `"tesseract": true`, `"insecure_for_chain": false` kèm `"ok": false` báo thiếu `AGENT_PRIVATE_KEY` — đây là hành vi trung thực bình thường ở Chế độ 1.)*
+*(Lưu ý: Nếu chưa điền `AGENT_PRIVATE_KEY`, `/health` trả `"ok": true`, `"chain_id": 43113`, `"tesseract": true`, `"insecure_for_chain": false` và `"agent_signer_configured": false` — máy bạn chỉ đọc chain, không ký `attest()`. Đây là hành vi bình thường ở Chế độ 1; xem [docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md](docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md) §6.)*
 
 Các trang chính:
 - `/` — Trang chủ Marketplace duyệt đồ sưu tầm đang đăng bán

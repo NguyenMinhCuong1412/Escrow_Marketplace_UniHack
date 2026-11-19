@@ -1,0 +1,12 @@
+# gitleaks allowlist — Phase 4 P4-5 triage (2026-11-20). Every entry reviewed manually: false positive.
+# Format: <commit>:<file>:<rule>:<line>  — reason above each entry.
+# public CDU token contract address on Fuji (not a secret)
+96e323ae297fa9941d3823cf57340e7eea4bafd4:contracts/deployments/43113.json:generic-api-key:10
+# test fixture Idempotency-Key value
+5074d61725088db3f4adc105e39767870080f8d9:backend/tests/test_listings_unit.py:generic-api-key:761
+# public CDU token contract address on Fuji (not a secret)
+95a752ca727796cbf9a23fd075392e706b659477:contracts/deployments/43113.json:generic-api-key:10
+# public CDU token contract address on Fuji (not a secret)
+798d194020975c8bfb18be568022e8634d3f8524:contracts/deployments/43113.json:generic-api-key:10
+# well-known public Anvil default dev key (chain 31337), not a real key
+8081f0d5c50f2dc43457c709304618699c23355b:docs/FRONTEND_SPEC.md:generic-api-key:391

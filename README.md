@@ -34,25 +34,9 @@ Escrow Marketplace là sàn giao dịch đồ sưu tầm nhiều người dùng 
 - **Điều kiện hoàn cọc sạch (`resolveClean()`):** Chỉ chạy được khi trade ở trạng thái `Attested`, **không bị flag** (`!flagged`) và **đã quá `disputeDeadline`** mà không có khiếu nại; bất kỳ địa chỉ nào cũng có thể gọi để hoàn lại tiền cọc hai bên (+1 điểm uy tín), **không** thanh toán giá trị món hàng.
 - **Giới hạn quyền AI Agent & Trọng tài (`onlyAgent` / `onlyOwner`):** AI Agent chỉ được gọi duy nhất giao dịch `attest(tradeId, riskScore, flagged, reportHash)` khi trade ở trạng thái `AwaitingEvidence` để ghi nhận kết quả kiểm tra và gắn cờ cảnh báo. Mọi tranh chấp (`flagged=true` hoặc khiếu nại qua `fileComplaint()`) do **Owner / Arbiter (một ví EOA)** xử lý on-chain qua `resolveDispute()`.
 
-## 3. Hướng dẫn chạy môi trường Local & Shared Docker
+## 3. Chạy Local Demo — Docker trên máy bạn + Avalanche Fuji `43113` (khuyến nghị)
 
-### Cách 1A: Shared Marketplace Client Zero-Config (`compose.shared.yaml`)
-
-Người dùng cuối chỉ cần **Git** và **Docker** — **không cần** cấu hình Database, Backend Worker, `PINATA_JWT`, `AGENT_PRIVATE_KEY`, `ATTEST_API_KEY` hay `OPS_JWT_SECRET`:
-
-```bash
-git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
-cd Escrow_Marketplace_UniHack
-SHARED_API_URL=https://<ops-backend-url> docker compose -f compose.shared.yaml up --build -d
-```
-
-- Khi chưa có URL Ops chính thức trước Phase 4 (`SHARED_API_URL` để trống), `docker compose -f compose.shared.yaml up --build -d` vẫn khởi chạy UI khỏe mạnh (`http://127.0.0.1:3000`, HTTP `200`) và hiển thị hướng dẫn rõ ràng thay cho lỗi `503 SHARED_BACKEND_UNCONFIGURED`. Khi có URL Ops, chỉ cần chạy lại với `SHARED_API_URL=...` **không cần `--build` lại**. *(Trước Final Release ở Phase 4, `SHARED_API_URL` HTTPS mặc định đáng tin cậy sẽ được cấu hình sẵn cho Client, hoàn toàn không chứa secrets).*
-- Phiên người dùng dùng cookie `HttpOnly; SameSite=Lax` với `SESSION_SECRET` tự sinh cục bộ trong volume `client_runtime_secrets` (tách biệt tuyệt đối khỏi mọi bí mật Ops).
-- Đội vận hành triển khai Ops Server bằng [`compose.ops.yaml`](compose.ops.yaml) và [`.env.ops.example`](.env.ops.example) (`backend` API keyless + `agent-worker` tách riêng giữ `AGENT_PRIVATE_KEY`; tuyệt đối không đưa ví Owner lên server).
-
-### Cách 1B: Chạy trọn bộ Local/Dev độc lập (`compose.yaml` — xem chi tiết tại [RUN_LOCAL_BEGINNER.md](RUN_LOCAL_BEGINNER.md))
-
-Chỉ cần **Git** và **Docker** (tự động cấu hình hợp đồng Fuji `43113`, Backend SQLite cục bộ và tự sinh an toàn `SESSION_SECRET` / `ATTEST_API_KEY` trong Docker volume `runtime_secrets` khi khởi chạy lần đầu):
+Chỉ cần **Git**, **Docker** và **Core Wallet** (bật Testnet Mode). Không cần VPS, domain hay server công khai; chi phí 0 đồng (chỉ dùng test AVAX miễn phí, **không** dùng mainnet).
 
 ```bash
 git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
@@ -60,9 +44,22 @@ cd Escrow_Marketplace_UniHack
 docker compose up --build -d
 ```
 
-Sau đó mở `http://127.0.0.1:3000` (hoặc `http://localhost:3000`). Nếu muốn bật upload IPFS (`PINATA_JWT`) hoặc AI Auto-Agent ký `attest()` (`AGENT_PRIVATE_KEY` + `AGENT_AUTO=true`), sao chép `.env.example` thành `.env`, điền giá trị rồi chạy `docker compose up -d`.
+Mở `http://127.0.0.1:3000`. Frontend + Backend chạy local, mọi giao dịch Escrow là giao dịch **thật** trên Avalanche Fuji. `SESSION_SECRET` / `ATTEST_API_KEY` tự sinh trong Docker volume `runtime_secrets`; không cần file `.env` để khởi động.
 
-### Cách 2: Chạy thủ công từng dịch vụ (Dev / Anvil local)
+**Hướng dẫn đầy đủ:** [docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md](docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md) — tạo 2 ví Seller/Buyer trong Core Wallet (khuyên dùng 2 browser profile), nhận test AVAX từ faucet, bật upload IPFS bằng Pinata miễn phí (`PINATA_JWT`), luồng giao dịch, kiểm tra tx trên Snowtrace, dừng Docker giữ dữ liệu SQLite. Cài Docker theo từng hệ điều hành: [RUN_LOCAL_BEGINNER.md](RUN_LOCAL_BEGINNER.md).
+
+| Chế độ | Hợp đồng | Bạn tự làm được | Giới hạn |
+|---|---|---|---|
+| **Mode A** (mặc định) | Fuji của nhóm (§5) | `createTrade`, `deposit` 30%, `submitEvidence`, `fileComplaint`, `cancelUnfunded`, `cancelOnEvidenceTimeout`, `resolveClean` (khi trade đã được attest) | `attest()` chỉ ví **Agent** của nhóm ký; `resolveDispute()` chỉ ví **Owner** của nhóm ký. Không có khóa Agent, Verify AI trả `503` (fail-closed) và trade kết thúc bằng `cancelOnEvidenceTimeout` (hoàn 100% cọc) |
+| **Mode B** (tuỳ chọn) | Bạn tự deploy bằng `contracts/script/Deploy.s.sol` | Toàn bộ, gồm Agent `attest` và Owner `resolveDispute` bằng ví testnet của chính bạn | Script đã kiểm thử trên Anvil; deploy Fuji theo Mode B chưa được nhóm kiểm thử end-to-end |
+
+Dừng: `docker compose stop` / `docker compose down` (giữ volume dữ liệu). **Không** dùng `docker compose down -v` nếu muốn giữ `marketplace.db`.
+
+### Nâng cao (tuỳ chọn): Shared Client / Ops Server
+
+`compose.shared.yaml` (client không giữ secret, gọi một Ops Backend từ xa qua `SHARED_API_URL`) và `compose.ops.yaml` (+ [`.env.ops.example`](.env.ops.example), [`docker/Caddyfile.ops.example`](docker/Caddyfile.ops.example)) phục vụ mô hình một máy chủ vận hành tập trung (`backend` API không giữ khóa + `agent-worker` cô lập giữ `AGENT_PRIVATE_KEY`). **Nhóm không vận hành Ops Server công khai** cho bài nộp này; nếu chạy `compose.shared.yaml` mà không có `SHARED_API_URL`, UI hiển thị hướng dẫn thay vì kết nối backend.
+
+### Dev: chạy thủ công từng dịch vụ với Anvil local (chỉ cho phát triển & test tự động — không phải bằng chứng Avalanche)
 
 ### Bước 1: Khởi động Local Blockchain (Anvil)
 ```bash
@@ -113,8 +110,8 @@ cd frontend && npx tsc --noEmit && npm test && npm run build
 
 - **Demo Video:** `PENDING-OWNER`
 - **Pitch Deck / Slide:** `PENDING-OWNER`
-- **Live Fuji dApp:** `OPTIONAL` *(chạy demo local kết nối Avalanche Fuji `43113` theo mục 3; chưa deploy URL công khai)*
-- **Fuji Test Evidence (`Trade #1..#4`):** Xem [docs/test-evidence/FUJI-TRADE-4-QA.md](docs/test-evidence/FUJI-TRADE-4-QA.md) (`Trade #4 = Cancelled` hoàn cọc timeout qua [`0x82ab62...4bbd`](https://testnet.snowtrace.io/tx/0x82ab6274f1cbc55ed7dfc07ec397896e117c9fd7ebcc9daedd8e2f56aef54bbd); `ResolvedClean` & phạt `5%` sẽ thực hiện khi quay video demo)
+- **Live Fuji dApp:** không có bản public — chạy Local Demo theo mục 3 (kết nối hợp đồng Fuji `43113` thật)
+- **Fuji Evidence (kiểm chứng on-chain 2026-11-20):** [docs/test-evidence/AVALANCHE-FUJI-DEMO-EVIDENCE.md](docs/test-evidence/AVALANCHE-FUJI-DEMO-EVIDENCE.md) — Trade #1..#4: `createTrade`, `deposit` 30%, `submitEvidence`, AI Agent `attest` (`flagged=true`, [`0x88abbc…fe12`](https://testnet.snowtrace.io/tx/0x88abbc5b767ae2f8260764f3caa74964e95c712ae97bb51879cb46d6ab5ffe12)), `fileComplaint`, Owner `resolveDispute` ([`0x384d45…e2cb`](https://testnet.snowtrace.io/tx/0x384d45a94d85cc374d87cfd5a80eb1242ca5915d818b1d0af73174bd63d1e2cb), phán quyết không lỗi), `cancelOnEvidenceTimeout` ([`0x82ab62…4bbd`](https://testnet.snowtrace.io/tx/0x82ab6274f1cbc55ed7dfc07ec397896e117c9fd7ebcc9daedd8e2f56aef54bbd)). `ResolvedClean` và `ResolvedDispute` phạt 5% sẽ được bổ sung từ lần quay video demo.
 - **Fuji Escrow Address (`43113`):** `0x19D053c84941411888f5b9e40c854365fdd4eb00` (block `60980241`, xem `contracts/deployments/43113.json`)
 - **Fuji CollectibleToken (`CDU`) Address:** `0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78`
 - **AI Agent Address (`onlyAgent`):** `0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081`
