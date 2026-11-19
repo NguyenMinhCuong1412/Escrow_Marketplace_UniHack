@@ -51,6 +51,38 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  agent-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      init-secrets:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+    command: ["python", "worker.py"]
+    environment:
+      RPC_URL: ${RPC_URL:-https://api.avax-test.network/ext/bc/C/rpc}
+      CHAIN_ID: ${CHAIN_ID:-43113}
+      ESCROW_ADDRESS: ${ESCROW_ADDRESS:-0x19D053c84941411888f5b9e40c854365fdd4eb00}
+      DATA_DIR: /data
+      ALLOW_LOCAL_HOSTS: ${ALLOW_LOCAL_HOSTS:-false}
+      ENFORCE_EVIDENCE_HASH: ${ENFORCE_EVIDENCE_HASH:-true}
+      VERIFY_CHAIN_BEFORE_TTL_RELEASE: ${VERIFY_CHAIN_BEFORE_TTL_RELEASE:-true}
+      REQUIRE_PROXY_SIGNATURE: ${REQUIRE_PROXY_SIGNATURE:-true}
+      IPFS_GATEWAY: ${IPFS_GATEWAY:-https://gateway.pinata.cloud/ipfs/}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      AGENT_PRIVATE_KEY: ${WORKER_AGENT_PRIVATE_KEY:-${AGENT_PRIVATE_KEY:-}}
+      AGENT_POLL_SECONDS: ${AGENT_POLL_SECONDS:-5}
+      RECONCILE_POLL_SECONDS: ${RECONCILE_POLL_SECONDS:-10}
+      WORKER_LEASE_TTL_SECONDS: ${WORKER_LEASE_TTL_SECONDS:-60}
+      ATTEST_API_KEY: ${ATTEST_API_KEY:-}
+    volumes:
+      - backend_data:/data
+      - runtime_secrets:/run/secrets-env:ro
+    restart: unless-stopped
+
   frontend:
     build:
       context: .

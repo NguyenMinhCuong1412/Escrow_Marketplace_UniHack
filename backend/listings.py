@@ -1074,8 +1074,10 @@ class MarketplaceService:
         limit: int = 20,
         client: Optional[Any] = None,
     ) -> dict[str, Any]:
+        # Đường đọc công khai GET /listings thuần đọc SQLite (không ghi DB hay quét RPC TTL);
+        # xử lý TTL quá hạn + xác minh on-chain được đảm nhiệm bởi worker reconcile và các đường ghi/chi tiết.
+        _ = client
         escrow = escrow_address.lower()
-        self.expire_stale_reservations(chain_id, escrow, client=client)
 
         clauses = ["chain_id = ?", "escrow_address = ?"]
         params: list[Any] = [chain_id, escrow]
