@@ -67,6 +67,7 @@ from chain import (  # noqa: E402
 
 from auto_agent import AutoAgent, UriConflict, UriRegistry, listing_message, recover_signer  # noqa: E402
 from db import MarketplaceDB  # noqa: E402
+from trade_indexer import TradeIndexer, is_trade_index_enabled  # noqa: E402
 from ops_auth import (  # noqa: E402
     OpsAuthConfigError,
     OpsAuthError,
@@ -533,6 +534,12 @@ class BackendRuntime:
         self.store = KnownHashStore(settings.data_dir / "known_hashes.json", db=self.db)
         self.registry = UriRegistry(settings.data_dir / "trade_uris.json", db=self.db)
         self.marketplace = MarketplaceService(db=self.db, settings=settings, download_fn=download)
+        self.trade_indexer = TradeIndexer(
+            db=self.db,
+            deployments_dir=settings.deployments_dir,
+            max_block_lag=max(0, int(os.environ.get("TRADE_INDEX_MAX_BLOCK_LAG", "20"))),
+            max_stale_seconds=max(1.0, float(os.environ.get("TRADE_INDEX_MAX_STALE_SECONDS", "45"))),
+        )
         self.state: dict = {"client": client, "readonly_client": client}
         self.pin_uploader = pin_uploader
         self._trade_locks: dict[int, threading.Lock] = {}
@@ -552,6 +559,7 @@ class BackendRuntime:
             settings.agent_poll_seconds,
             reconcile=self.reconcile_marketplace_readonly,
             process_verify_jobs=self.process_pending_verify_jobs,
+            sync_trade_index=self.sync_trade_index_readonly,
             db=self.db,
             worker_id=settings.worker_id,
             lease_ttl_seconds=settings.worker_lease_ttl_seconds,
@@ -729,6 +737,13 @@ class BackendRuntime:
     def reconcile_marketplace_readonly(self) -> None:
         cid, esc, active_client = self.active_chain_context(require_client=False)
         self.marketplace.reconcile(client=active_client, chain_id=cid, escrow_address=esc)
+
+    def sync_trade_index_readonly(self) -> None:
+        if not is_trade_index_enabled():
+            return
+        cid, esc, active_client = self.active_chain_context(require_client=False)
+        if active_client is not None:
+            self.trade_indexer.sync_tick(active_client, cid, esc)
 
     def _agent_verify(self, trade_id: int, uris: dict[str, str]) -> VerifyResponse:
         try:
@@ -2135,7 +2150,67 @@ def create_app(settings: Optional[Settings] = None, client: Optional[EscrowClien
             marketplace=True,
         )
         cid, esc, _ = active_chain_context(require_client=False)
-        return marketplace.get_trade_context(cid, esc, trade_id)
+        out = marketplace.get_trade_context(cid, esc, trade_id)
+        return out
+
+    @app.get("/trades/index")
+    def get_trade_index_endpoint(
+        request: Request,
+        wallet: Optional[str] = None,
+        filter: str = "all",
+        offset: int = 0,
+        limit: int = 50,
+        authorization: Optional[str] = Header(None, alias="Authorization"),
+        x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+        x_authenticated_wallet: Optional[str] = Header(None, alias="X-Authenticated-Wallet"),
+        x_authenticated_chain_id: Optional[str] = Header(None, alias="X-Authenticated-Chain-Id"),
+        x_auth_timestamp: Optional[str] = Header(None, alias="X-Auth-Timestamp"),
+        x_auth_nonce: Optional[str] = Header(None, alias="X-Auth-Nonce"),
+        x_auth_signature: Optional[str] = Header(None, alias="X-Auth-Signature"),
+    ):
+        if not is_trade_index_enabled():
+            raise MarketplaceError(
+                503,
+                "TRADE_INDEX_DISABLED",
+                "Trade index đang tạm tắt ở cấu hình runtime.",
+                details={"fallback": "direct_rpc"},
+            )
+        cid, esc, _ = active_chain_context(require_client=False)
+        authenticate_marketplace_actor(
+            request,
+            cid,
+            x_api_key,
+            x_authenticated_wallet,
+            x_authenticated_chain_id,
+            x_auth_timestamp,
+            x_auth_nonce,
+            x_auth_signature,
+            bucket="mkt_read",
+            limit=max(60, int(settings.read_rate_limit_per_min)),
+            authorization=authorization,
+        )
+        clean_filter = (filter or "all").strip().lower()
+        if clean_filter not in ("all", "disputed", "flagged", "active"):
+            raise MarketplaceError(422, "INVALID_FILTER", "Giá trị filter không hợp lệ.")
+        if int(offset) < 0:
+            raise MarketplaceError(422, "INVALID_OFFSET", "Giá trị offset không được âm.")
+        clean_wallet: Optional[str] = None
+        if wallet is not None and wallet.strip():
+            clean_wallet = normalize_wallet(wallet, "wallet")
+        eff_limit = max(1, min(100, int(limit)))
+        payload = db.query_trade_index(
+            cid,
+            esc,
+            wallet=clean_wallet,
+            filter_mode=clean_filter,
+            offset=int(offset),
+            limit=eff_limit,
+            max_stale_seconds=runtime.trade_indexer.max_stale_seconds,
+            max_block_lag=runtime.trade_indexer.max_block_lag,
+        )
+        if not payload["deployBlock"]:
+            payload["deployBlock"] = runtime.trade_indexer.resolve_deploy_block(cid)
+        return payload
 
     @app.post("/marketplace/reconcile")
     def reconcile_marketplace_endpoint(

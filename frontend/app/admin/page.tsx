@@ -1,10 +1,28 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useAccount, useReadContract, useReadContracts, useWriteContract, usePublicClient } from 'wagmi';
-import { escrowAddress, escrowAbi } from '@/lib/contracts';
+import {
+  useAccount,
+  useChainId,
+  useReadContract,
+  useWriteContract,
+  usePublicClient,
+} from 'wagmi';
+import { chainId as configuredChainId, escrowAddress, escrowAbi } from '@/lib/contracts';
 import { targetChain } from '@/lib/wagmi';
+import {
+  createNonOverlappingPollController,
+  isAbortError,
+  type NonOverlappingPollController,
+} from '@/lib/marketplace';
+import {
+  ADMIN_ALL_PAGE_SIZE,
+  createPublicClientTradeAdapter,
+  discoverAdminTrades,
+  type MinimalPublicClient,
+} from '@/lib/trade-discovery';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import { StateBadge } from '@/components/StateBadge';
 import { AddressDisplay } from '@/components/AddressDisplay';
 import { AvaxAmount } from '@/components/AvaxAmount';
@@ -30,11 +48,13 @@ import { toast } from 'sonner';
 
 export default function AdminDisputePage() {
   const { address, isConnected, chain } = useAccount();
+  const activeChainId = useChainId() || configuredChainId;
   const publicClient = usePublicClient();
+  const { isAuthenticated } = useAuthSession();
   const { writeContractAsync } = useWriteContract();
 
   const [activeTab, setActiveTab] = useState<'disputed' | 'flagged' | 'all'>('disputed');
-  const [selectedTrade, setSelectedTrade] = useState<TradeData | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     trade: TradeData | null;
@@ -46,6 +66,10 @@ export default function AdminDisputePage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const hasValidContract =
+    escrowAddress.toLowerCase() !== '0x0000000000000000000000000000000000000000' &&
+    Boolean(publicClient);
+
   // 1. Read owner of Escrow contract
   const { data: rawOwner, isLoading: isLoadingOwner } = useReadContract({
     address: escrowAddress,
@@ -53,110 +77,265 @@ export default function AdminDisputePage() {
     functionName: 'owner',
     query: {
       enabled: escrowAddress !== '0x0000000000000000000000000000000000000000',
+      staleTime: 30000,
+      refetchOnWindowFocus: false,
     },
   });
-  const contractOwner = (rawOwner as string || '').toLowerCase();
+  const contractOwner = ((rawOwner as string) || '').toLowerCase();
   const isOwner = Boolean(address && address.toLowerCase() === contractOwner);
 
-  // 2. Read nextTradeId to discover all trades
-  const {
-    data: rawNextTradeId,
-    isLoading: isLoadingNextId,
-    refetch: refetchNextId,
-  } = useReadContract({
-    address: escrowAddress,
-    abi: escrowAbi,
-    functionName: 'nextTradeId',
-    query: {
-      enabled: escrowAddress !== '0x0000000000000000000000000000000000000000',
-      refetchInterval: 5000,
-    },
-  });
+  const scopeKey = useMemo(
+    () =>
+      `${activeChainId}:${escrowAddress.toLowerCase()}:${(address || '').toLowerCase()}:${
+        isAuthenticated ? '1' : '0'
+      }`,
+    [activeChainId, address, isAuthenticated]
+  );
 
-  const nextTradeId = rawNextTradeId ? Number(rawNextTradeId) : 1;
+  interface AdminDiscoveryState {
+    scopeKey: string;
+    disputedTrades: TradeData[];
+    flaggedTrades: TradeData[];
+    pageTrades: TradeData[];
+    totalCreated: number;
+    page: number;
+    totalPages: number;
+    usedFallback: boolean;
+    fallbackReason: string | null;
+    hasLoadedOnce: boolean;
+    isLoading: boolean;
+    isRefreshing: boolean;
+    rpcError: string | null;
+  }
 
-  // 3. Batch read trades 1 .. nextTradeId - 1
-  const contracts = useMemo(() => {
-    const list = [];
-    for (let id = 1; id < nextTradeId; id++) {
-      list.push({
-        address: escrowAddress,
-        abi: escrowAbi as any,
-        functionName: 'getTrade',
-        args: [BigInt(id)],
+  const [discoveryState, setDiscoveryState] = useState<AdminDiscoveryState>(() => ({
+    scopeKey,
+    disputedTrades: [],
+    flaggedTrades: [],
+    pageTrades: [],
+    totalCreated: 0,
+    page: 1,
+    totalPages: 1,
+    usedFallback: false,
+    fallbackReason: null,
+    hasLoadedOnce: false,
+    isLoading: hasValidContract,
+    isRefreshing: false,
+    rpcError: null,
+  }));
+
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  const pausePollingRef = useRef(false);
+  pausePollingRef.current = Boolean(confirmModal.open || isSubmitting);
+  const controllerRef = useRef<NonOverlappingPollController | null>(null);
+  const activeRunRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [scopeKey]);
+
+  useEffect(() => {
+    if (!hasValidContract || !publicClient) {
+      controllerRef.current?.dispose();
+      controllerRef.current = null;
+      activeRunRef.current = null;
+      setDiscoveryState({
+        scopeKey,
+        disputedTrades: [],
+        flaggedTrades: [],
+        pageTrades: [],
+        totalCreated: 0,
+        page: 1,
+        totalPages: 1,
+        usedFallback: false,
+        fallbackReason: null,
+        hasLoadedOnce: false,
+        isLoading: false,
+        isRefreshing: false,
+        rpcError: null,
       });
+      return;
     }
-    return list;
-  }, [nextTradeId]);
 
-  const {
-    data: rawTrades,
-    isLoading: isLoadingTrades,
-    refetch: refetchTrades,
-  } = useReadContracts({
-    contracts,
-    query: {
-      enabled: contracts.length > 0,
-      staleTime: 5000,
-    },
-  });
-
-  // 4. Parse trades
-  const allTrades = useMemo(() => {
-    if (!rawTrades || rawTrades.length === 0) return [];
-    const list: TradeData[] = [];
-
-    rawTrades.forEach((res, index) => {
-      if (res.status === 'success' && res.result) {
-        const raw = res.result as any;
-        const id = BigInt(index + 1);
-        const seller = (raw.seller || raw[0] || '0x0000000000000000000000000000000000000000') as `0x${string}`;
-        const buyer = (raw.buyer || raw[1] || '0x0000000000000000000000000000000000000000') as `0x${string}`;
-
-        if (seller === '0x0000000000000000000000000000000000000000' || seller === '0x') {
-          return;
-        }
-
-        list.push({
-          id,
-          seller,
-          buyer,
-          itemValue: BigInt(raw.itemValue || raw[2] || 0),
-          depositRequired: BigInt(raw.depositRequired || raw[3] || 0),
-          sellerDeposit: BigInt(raw.sellerDeposit || raw[4] || 0),
-          buyerDeposit: BigInt(raw.buyerDeposit || raw[5] || 0),
-          nonce: (raw.nonce || raw[6] || '0x') as `0x${string}`,
-          sellerEvidenceHash: (raw.sellerEvidenceHash || raw[7] || '0x') as `0x${string}`,
-          buyerEvidenceHash: (raw.buyerEvidenceHash || raw[8] || '0x') as `0x${string}`,
-          reportHash: (raw.reportHash || raw[9] || '0x') as `0x${string}`,
-          riskScore: Number(raw.riskScore || raw[10] || 0),
-          flagged: Boolean(raw.flagged !== undefined ? raw.flagged : raw[11]),
-          createdAt: BigInt(raw.createdAt || raw[12] || 0),
-          evidenceDeadline: BigInt(raw.evidenceDeadline || raw[13] || 0),
-          disputeDeadline: BigInt(raw.disputeDeadline || raw[14] || 0),
-          state: Number(raw.state !== undefined ? raw.state : raw[15] || 0),
-        });
-      }
+    const capturedScope = scopeKey;
+    const capturedAuth = isAuthenticated;
+    const adapter = createPublicClientTradeAdapter({
+      chainId: activeChainId,
+      escrowAddress,
+      escrowAbi,
+      publicClient: publicClient as unknown as MinimalPublicClient,
     });
 
-    return list.sort((a, b) => (b.id > a.id ? 1 : -1));
-  }, [rawTrades]);
+    setDiscoveryState((prev) => {
+      const sameScope = prev.scopeKey === capturedScope;
+      return {
+        scopeKey: capturedScope,
+        disputedTrades: sameScope ? prev.disputedTrades : [],
+        flaggedTrades: sameScope ? prev.flaggedTrades : [],
+        pageTrades: sameScope ? prev.pageTrades : [],
+        totalCreated: sameScope ? prev.totalCreated : 0,
+        page: sameScope ? prev.page : 1,
+        totalPages: sameScope ? prev.totalPages : 1,
+        usedFallback: sameScope ? prev.usedFallback : false,
+        fallbackReason: sameScope ? prev.fallbackReason : null,
+        hasLoadedOnce: sameScope ? prev.hasLoadedOnce : false,
+        isLoading: sameScope ? !prev.hasLoadedOnce : true,
+        isRefreshing: false,
+        rpcError: null,
+      };
+    });
 
-  // Filtered views
-  // State: 0: Created, 1: AwaitingEvidence, 2: Attested, 3: Disputed, 4: Resolved, 5: Cancelled
-  const disputedTrades = useMemo(() => allTrades.filter((t) => t.state === 3), [allTrades]);
-  const flaggedTrades = useMemo(() => allTrades.filter((t) => t.flagged && t.state !== 4 && t.state !== 5), [allTrades]);
+    const controller = createNonOverlappingPollController({
+      baseIntervalMs: 5000,
+      maxBackoffMs: 30000,
+      isVisible: () =>
+        typeof document === 'undefined' ||
+        document.visibilityState === 'visible',
+      canPoll: () =>
+        scopeKeyRef.current === capturedScope && !pausePollingRef.current,
+      runTask: async ({ signal, silent, isCurrent }) => {
+        if (!silent) {
+          setDiscoveryState((prev) =>
+            prev.scopeKey === capturedScope
+              ? {
+                  ...prev,
+                  isRefreshing: prev.hasLoadedOnce,
+                  isLoading: !prev.hasLoadedOnce,
+                }
+              : prev
+          );
+        }
+        try {
+          const result = await discoverAdminTrades(adapter, {
+            activeTab: activeTabRef.current,
+            page: currentPageRef.current,
+            pageSize: ADMIN_ALL_PAGE_SIZE,
+            isAuthenticated: capturedAuth,
+            signal,
+          });
+          if (!isCurrent() || scopeKeyRef.current !== capturedScope) {
+            return;
+          }
+          setDiscoveryState({
+            scopeKey: capturedScope,
+            disputedTrades: result.disputedTrades,
+            flaggedTrades: result.flaggedTrades,
+            pageTrades: result.pageTrades,
+            totalCreated: result.totalCreated,
+            page: result.page,
+            totalPages: result.totalPages,
+            usedFallback: result.usedFallback,
+            fallbackReason: result.fallbackReason,
+            hasLoadedOnce: true,
+            isLoading: false,
+            isRefreshing: false,
+            rpcError: null,
+          });
+        } catch (err) {
+          if (
+            isAbortError(err, signal) ||
+            !isCurrent() ||
+            scopeKeyRef.current !== capturedScope
+          ) {
+            return;
+          }
+          const msg =
+            err instanceof Error && err.message
+              ? err.message
+              : 'Không thể đồng bộ dữ liệu hợp đồng từ RPC.';
+          setDiscoveryState((prev) => {
+            const sameScope = prev.scopeKey === capturedScope;
+            return {
+              scopeKey: capturedScope,
+              disputedTrades: sameScope ? prev.disputedTrades : [],
+              flaggedTrades: sameScope ? prev.flaggedTrades : [],
+              pageTrades: sameScope ? prev.pageTrades : [],
+              totalCreated: sameScope ? prev.totalCreated : 0,
+              page: sameScope ? prev.page : 1,
+              totalPages: sameScope ? prev.totalPages : 1,
+              usedFallback: sameScope ? prev.usedFallback : true,
+              fallbackReason: sameScope ? prev.fallbackReason : 'rpc_error',
+              hasLoadedOnce: sameScope ? prev.hasLoadedOnce : false,
+              isLoading: false,
+              isRefreshing: false,
+              rpcError: msg,
+            };
+          });
+          throw err;
+        }
+      },
+    });
+
+    controllerRef.current = controller;
+    const initRun = controller.trigger({ silent: false }).finally(() => {
+      if (activeRunRef.current === initRun) {
+        activeRunRef.current = null;
+      }
+    });
+    activeRunRef.current = initRun;
+
+    const handleVisibility = () => {
+      controller.onVisibilityOrStateChange();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibility);
+    }
+
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibility);
+      }
+      controller.dispose();
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
+      activeRunRef.current = null;
+    };
+  }, [scopeKey, hasValidContract, publicClient, activeChainId, isAuthenticated]);
+
+  const refetchAll = useCallback(() => {
+    const ctrl = controllerRef.current;
+    if (!ctrl) return Promise.resolve();
+    const run = ctrl.trigger({ silent: false }).finally(() => {
+      if (activeRunRef.current === run) {
+        activeRunRef.current = null;
+      }
+    });
+    activeRunRef.current = run;
+    return run;
+  }, []);
+
+  useEffect(() => {
+    if (!hasValidContract) return;
+    if (controllerRef.current) {
+      void controllerRef.current.trigger({ silent: false });
+    }
+  }, [activeTab, currentPage, hasValidContract]);
+
+  const isScopeSynced = discoveryState.scopeKey === scopeKey;
+  const disputedTrades = isScopeSynced ? discoveryState.disputedTrades : [];
+  const flaggedTrades = isScopeSynced ? discoveryState.flaggedTrades : [];
+  const pageTrades = isScopeSynced ? discoveryState.pageTrades : [];
+  const totalCreated = isScopeSynced ? discoveryState.totalCreated : 0;
+  const safePage = isScopeSynced ? discoveryState.page : 1;
+  const totalPages = isScopeSynced ? discoveryState.totalPages : 1;
+  const usedFallback = isScopeSynced ? discoveryState.usedFallback : false;
+  const fallbackReason = isScopeSynced ? discoveryState.fallbackReason : null;
+  const hasLoadedOnce = isScopeSynced ? discoveryState.hasLoadedOnce : false;
+  const rpcError = isScopeSynced ? discoveryState.rpcError : null;
+  const isLoadingTrades = isScopeSynced ? discoveryState.isLoading : hasValidContract;
+  const isRefreshing = isScopeSynced ? discoveryState.isRefreshing : false;
 
   const displayedTrades = useMemo(() => {
     if (activeTab === 'disputed') return disputedTrades;
     if (activeTab === 'flagged') return flaggedTrades;
-    return allTrades;
-  }, [activeTab, disputedTrades, flaggedTrades, allTrades]);
-
-  const refetchAll = () => {
-    refetchNextId();
-    refetchTrades();
-  };
+    return pageTrades;
+  }, [activeTab, disputedTrades, flaggedTrades, pageTrades]);
 
   // Transaction runner
   const handleResolveDispute = async (trade: TradeData, violator: `0x${string}`, label: string) => {
@@ -230,7 +409,7 @@ export default function AdminDisputePage() {
     }
   };
 
-  const isInitialLoading = isLoadingOwner || isLoadingNextId || isLoadingTrades;
+  const isInitialLoading = isLoadingOwner || isLoadingTrades;
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
@@ -257,10 +436,12 @@ export default function AdminDisputePage() {
 
         <button
           onClick={refetchAll}
-          disabled={isInitialLoading}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-xs font-medium text-[#17191F] hover:bg-[#F7F8FA] hover:border-[#3458D4]/40 shadow-sm transition-colors self-start sm:self-auto"
+          disabled={isInitialLoading || isRefreshing}
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#FFFFFF] border border-[#E5E7EB] text-xs font-medium text-[#17191F] hover:bg-[#F7F8FA] hover:border-[#3458D4]/40 shadow-sm transition-colors self-start sm:self-auto disabled:opacity-60"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isInitialLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`w-3.5 h-3.5 ${isInitialLoading || isRefreshing ? 'animate-spin' : ''}`}
+          />
           Làm mới
         </button>
       </div>
@@ -350,21 +531,80 @@ export default function AdminDisputePage() {
           >
             Tất cả giao dịch
             <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-[#F7F8FA] text-[#525866]'}`}>
-              {allTrades.length}
+              {totalCreated}
             </span>
           </button>
         </div>
 
         <div className="text-xs text-[#525866]">
-          Tổng cộng: <span className="font-semibold text-[#17191F]">{allTrades.length}</span> giao dịch trên hợp đồng
+          Tổng cộng: <span className="font-semibold text-[#17191F]">{totalCreated}</span> giao dịch trên hợp đồng
         </div>
       </div>
+
+      {/* RPC Error / Fallback Banner */}
+      {rpcError && (
+        <div
+          role="alert"
+          className="p-4 rounded-xl bg-red-50 border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
+        >
+          <div className="flex items-start gap-2.5 text-xs text-red-800">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-red-900">
+                Lỗi đồng bộ dữ liệu blockchain (RPC)
+              </p>
+              <p className="mt-0.5 text-red-700">
+                {hasLoadedOnce
+                  ? 'Đang giữ dữ liệu hợp lệ gần nhất và tự động thử lại theo backoff. '
+                  : 'Chưa thể tải danh sách giao dịch đầy đủ từ hợp đồng. '}
+                <span className="font-mono text-[11px]">{rpcError}</span>
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refetchAll()}
+            className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shrink-0 transition-colors"
+          >
+            Thử lại
+          </button>
+        </div>
+      )}
+
+      {!rpcError && usedFallback && fallbackReason && (
+        <div className="p-3 rounded-xl bg-[#F0B44D]/10 border border-[#F0B44D]/40 text-[11px] text-[#784B06] flex items-center gap-2">
+          <Info className="w-4 h-4 text-[#B47814] shrink-0" />
+          <span>
+            Đang quét trực tiếp từ blockchain (Direct-RPC Fallback: <span className="font-mono">{fallbackReason}</span>) để bảo toàn 100% giao dịch.
+          </span>
+        </div>
+      )}
 
       {/* Trade List */}
       {isInitialLoading ? (
         <div className="py-20 text-center space-y-3">
           <div className="inline-block w-8 h-8 border-2 border-[#3458D4] border-t-transparent rounded-full animate-spin" />
           <p className="text-xs text-[#525866]">Đang quét các giao dịch trên blockchain...</p>
+        </div>
+      ) : rpcError && !hasLoadedOnce ? (
+        <div className="rounded-2xl border border-red-200 bg-[#FFFFFF] p-10 text-center space-y-3 shadow-sm">
+          <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-200 text-red-600 flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-6 h-6 text-red-600" />
+          </div>
+          <h3 className="text-sm font-semibold text-red-900">
+            Không thể xác minh danh sách giao dịch từ blockchain
+          </h3>
+          <p className="text-xs text-red-700 max-w-md mx-auto">
+            Hệ thống từ chối hiển thị danh sách trống khi RPC lỗi để tránh bỏ sót tranh chấp. Vui lòng thử lại sau giây lát.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetchAll()}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Đồng bộ lại
+          </button>
         </div>
       ) : displayedTrades.length === 0 ? (
         <div className="rounded-2xl border border-[#E5E7EB] bg-[#FFFFFF] p-12 text-center space-y-3 shadow-sm">
@@ -601,6 +841,35 @@ export default function AdminDisputePage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Pagination for "All" tab (20 rows/page) */}
+      {activeTab === 'all' && !isInitialLoading && totalCreated > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-[#E5E7EB]">
+          <p className="text-xs text-[#525866]">
+            Trang <span className="font-semibold text-[#17191F]">{safePage}</span> /{' '}
+            <span className="font-semibold text-[#17191F]">{totalPages}</span> · Hiển thị tối đa{' '}
+            {ADMIN_ALL_PAGE_SIZE} giao dịch/trang (Tổng {totalCreated})
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1 || isRefreshing}
+              className="px-3.5 py-1.5 rounded-lg bg-[#FFFFFF] border border-[#E5E7EB] text-xs font-semibold text-[#17191F] hover:bg-[#F7F8FA] disabled:opacity-50"
+            >
+              Trang trước
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages || isRefreshing}
+              className="px-3.5 py-1.5 rounded-lg bg-[#FFFFFF] border border-[#E5E7EB] text-xs font-semibold text-[#17191F] hover:bg-[#F7F8FA] disabled:opacity-50"
+            >
+              Trang sau
+            </button>
+          </div>
         </div>
       )}
 
