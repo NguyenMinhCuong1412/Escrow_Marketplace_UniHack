@@ -122,12 +122,14 @@ class AutoAgent:
         lease_name: str = "auto_agent_leader",
         lease_ttl_seconds: float = 60.0,
         reconcile_interval_seconds: float = 0.0,
+        process_verify_jobs: Optional[Callable[[], None]] = None,
         clock: Callable[[], float] = time.time,
     ):
         self._get_client = get_client
         self._registry = registry
         self._verify = verify
         self._reconcile = reconcile
+        self._process_verify_jobs = process_verify_jobs
         self._db = db
         self._clock = clock
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -266,6 +268,13 @@ class AutoAgent:
                         self.last_reconcile_error = str(getattr(e, "detail", e))
                         log.warning("marketplace reconcile lỗi: %s", self.last_reconcile_error)
 
+                # 1b. Xử lý các manual verify job do API công khai ủy thác (DEC-025) trước vòng quét chung.
+                if self._process_verify_jobs is not None:
+                    try:
+                        self._process_verify_jobs()
+                    except Exception as e:
+                        log.warning("process_verify_jobs lỗi: %s", getattr(e, "detail", e))
+
                 # 2. Quét AI attest tự động như hiện hữu.
                 c = self._get_client()
                 active_client = c
@@ -292,6 +301,28 @@ class AutoAgent:
                 self.last_error = str(getattr(e, "detail", e))
                 self._persist_runtime(running=bool(self.running or hold_lease), client=active_client)
                 raise
+            finally:
+                if self._use_leader_lease and self._db is not None and not hold_lease and not self.running:
+                    self._db.release_worker_lease(self._lease_name, self.worker_id)
+                    self.is_leader = False
+
+    def run_pending_verify_jobs(self, *, hold_lease: bool = True) -> bool:
+        """Xử lý nhanh các manual verify job trong hàng đợi SQLite dưới leader lease."""
+        if self._process_verify_jobs is None:
+            return False
+        with self._tick_lock:
+            now = self._clock()
+            if self._use_leader_lease and self._db is not None:
+                acquired = self._db.acquire_worker_lease(
+                    self._lease_name, self.worker_id, self._lease_ttl_seconds, now=now
+                )
+                if not acquired:
+                    self.is_leader = False
+                    return False
+                self.is_leader = True
+            try:
+                self._process_verify_jobs()
+                return True
             finally:
                 if self._use_leader_lease and self._db is not None and not hold_lease and not self.running:
                     self._db.release_worker_lease(self._lease_name, self.worker_id)

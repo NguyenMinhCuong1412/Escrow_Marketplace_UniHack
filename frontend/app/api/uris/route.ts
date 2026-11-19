@@ -1,20 +1,20 @@
 import { NextResponse } from 'next/server';
 import { verifySessionFromRequest } from '@/lib/auth-session';
-import { validateCsrfRequest } from '@/lib/marketplace-bff';
+import {
+  backendBaseUrl,
+  buildSignedProxyHeaders,
+  isSharedBffMode,
+  validateCsrfRequest,
+} from '@/lib/marketplace-bff';
 
 // Proxy server-side tới backend POST /trade/{id}/uris — báo cho AI Agent tự động biết
-// đường dẫn ipfs:// của ảnh niêm yết / bằng chứng. ATTEST_API_KEY chỉ đọc ở server.
+// đường dẫn ipfs:// của ảnh niêm yết / bằng chứng.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const TIMEOUT_MS = 20_000;
 const MAX_URI_LEN = 2048;
 const ROLES = ['listing', 'seller', 'buyer'];
-
-function backendBaseUrl(): string {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
-  return url.replace(/\/+$/, '');
-}
 
 export async function POST(request: Request) {
   const csrfError = validateCsrfRequest(request);
@@ -55,8 +55,30 @@ export async function POST(request: Request) {
   if (body.signature) payload.signature = body.signature;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const apiKey = process.env.ATTEST_API_KEY;
-  if (apiKey) headers['X-API-Key'] = apiKey;
+  if (isSharedBffMode()) {
+    if (!session.opsToken) {
+      return NextResponse.json(
+        {
+          error_code: 'UNAUTHORIZED',
+          detail: 'Phiên đăng nhập chưa có Ops JWT hợp lệ. Vui lòng kết nối lại ví.',
+        },
+        { status: 401 }
+      );
+    }
+    headers['Authorization'] = `Bearer ${session.opsToken}`;
+  } else {
+    const apiKey = (process.env.ATTEST_API_KEY || '').trim();
+    if (apiKey) {
+      const signed = buildSignedProxyHeaders({
+        method: 'POST',
+        upstreamPath: `/trade/${tradeId}/uris`,
+        session,
+        apiKey,
+      });
+      if (!signed.ok) return signed.response;
+      Object.assign(headers, signed.headers);
+    }
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
