@@ -1,0 +1,264 @@
+{
+  "network": "fuji",
+  "started_utc": "2026-11-20T06:07:18Z",
+  "chain_id": 43113,
+  "rpc_host": "api.avax-test.network",
+  "escrow": "0x19D053c84941411888f5b9e40c854365fdd4eb00",
+  "token": "0xD0c99809e2F035Bf9d99cCB0593A9cc4B6411F78",
+  "seller": "0xeBb338A3D44F197AFFf45C09601032e620bc56FF",
+  "buyer": "0xD242eA7c7870F0b98358670550268689A4636Be2",
+  "agent": "0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081",
+  "onchain_agent": "0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081",
+  "owner": "0xCa76cBE87902108712729A02F78C1F8cC20b39Eb",
+  "windows": {
+    "evidence": 600,
+    "attest": 600,
+    "dispute": 90
+  },
+  "balances_before_wei": {
+    "seller": "50000000000000000",
+    "buyer": "50000000000000000",
+    "agent": "269999999980041720"
+  },
+  "health": {
+    "ok": true,
+    "chain_id": 43113,
+    "agent": "0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081",
+    "agent_matches_contract": true,
+    "tesseract": true,
+    "pinata_relay_configured": true,
+    "insecure_for_chain": false
+  },
+  "listing_image": {
+    "uri": "ipfs://QmRTUnxmnUkx3ZtcLudi6rHAC1NucdpciTTJTLbRqzYMKF",
+    "sha256": "7cadab1edf1802ed63aaf8b725bd3646d6ee939369551d2a938894e88ec31df1",
+    "synthetic_seed": 2076584
+  },
+  "listing_id": "lst_0032d2b5ba3a4b619434",
+  "request_id": "req_2af799d9e2c74568a303",
+  "trade_id": 6,
+  "deposit_required_wei": "3000000000000000",
+  "evidence": {
+    "nonce_short": "6426def8",
+    "seller_uri": "ipfs://QmeYBPV6sTbqp3zwxV3rpKnuGr2HKYqcJbLPV2jsYNdQfY",
+    "seller_sha256": "903e863ac4258bd93df526d1296bbda6b5daa0cd0e7e9198868c6cffa0eff3f4",
+    "buyer_uri": "ipfs://QmSr8d6CB3UHXQmFoTneLs7g62cMeQPwD1CtmLA4X7EbbV",
+    "buyer_sha256": "c16def67c221bd1bc09f564ca3810a9e674f1873454778fa29197549b319c8f7",
+    "seller_hash_local": "0x4561d4313a5f7b27d506e5d1a051b0b038553ba9ee0c7cb1f4c6a40e09f4692d",
+    "seller_hash_onchain": "0x4561d4313a5f7b27d506e5d1a051b0b038553ba9ee0c7cb1f4c6a40e09f4692d",
+    "buyer_hash_local": "0x2e742221a4c95c9b2eec0490c2909141b65ac7ab3d7469d66ecdc206dcc0962d",
+    "buyer_hash_onchain": "0x2e742221a4c95c9b2eec0490c2909141b65ac7ab3d7469d66ecdc206dcc0962d"
+  },
+  "attest": {
+    "state": "Attested",
+    "flagged": false,
+    "risk_score": 20,
+    "report_hash_onchain": "0x88002b404c3970806297ea7d2e4db84a2a32117677de93c9b269cd2863f4d11b",
+    "report_hash_backend": "0x88002b404c3970806297ea7d2e4db84a2a32117677de93c9b269cd2863f4d11b",
+    "notes": []
+  },
+  "resolution": {
+    "final_state": "Resolved",
+    "seller_refund_wei": "3000000000000000",
+    "buyer_refund_wei": "3000000000000000",
+    "deposit_each_wei": "3000000000000000",
+    "cdu_after": [
+      "0",
+      "0"
+    ],
+    "reputation_after": [
+      51,
+      51
+    ],
+    "pending_withdrawals": [
+      "0",
+      "0"
+    ],
+    "escrow_balance_wei_after": "600000000000000000",
+    "payout_deferred_events": 0
+  },
+  "balances_after_wei": {
+    "seller": "49999999920582720",
+    "buyer": "49999999975310080",
+    "agent": "269999999970608280"
+  },
+  "gas_fee_total_wei_by_role": {
+    "seller": "79417280",
+    "buyer": "24689920",
+    "agent": "9433440"
+  },
+  "verdict": "E2E PASS (Fuji)",
+  "steps": [
+    {
+      "id": "E0",
+      "name": "Chain/contract/roles",
+      "status": "PASS",
+      "detail": "chain=43113 escrow=0x19D053c84941411888f5b9e40c854365fdd4eb00 agent_match=True seller≠buyer≠agent≠owner=True"
+    },
+    {
+      "id": "E0b",
+      "name": "Test AVAX balances",
+      "status": "PASS",
+      "detail": "seller=0.05 buyer=0.05 agent=0.26999999998004172"
+    },
+    {
+      "id": "E0c",
+      "name": "Backend /health (in-process, Final Freeze toggles)",
+      "status": "PASS",
+      "detail": "{\"ok\": true, \"chain_id\": 43113, \"agent\": \"0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081\", \"agent_matches_contract\": true, \"tesseract\": true, \"pinata_relay_configured\": true, \"insecure_for_chain\": false}"
+    },
+    {
+      "id": "E1",
+      "name": "Seller tạo listing (ảnh IPFS)",
+      "status": "PASS",
+      "detail": "listing=lst_0032d2b5ba3a4b619434 image=ipfs://QmRTUnxmnUkx3ZtcLudi6rHAC1NucdpciTTJTLbRqzYMKF"
+    },
+    {
+      "id": "E2",
+      "name": "Buyer gửi yêu cầu mua",
+      "status": "PASS",
+      "detail": "request=req_2af799d9e2c74568a303"
+    },
+    {
+      "id": "E3",
+      "name": "Seller accept + createTrade + bind-trade",
+      "status": "PASS",
+      "detail": "trade_id=6"
+    },
+    {
+      "id": "E4",
+      "name": "Deposit 30% ×2",
+      "status": "PASS",
+      "detail": "each=0.003 AVAX state=AwaitingEvidence CDU seller/buyer=(3000000000000000, 3000000000000000)"
+    },
+    {
+      "id": "E5",
+      "name": "Evidence (synthetic, nonce in frame) uploaded IPFS",
+      "status": "PASS",
+      "detail": "seller=ipfs://QmeYBPV6sTbqp3zwxV3rpKnuGr2HKYqcJbLPV2jsYNdQfY buyer=ipfs://QmSr8d6CB3UHXQmFoTneLs7g62cMeQPwD1CtmLA4X7EbbV"
+    },
+    {
+      "id": "E6",
+      "name": "submitEvidence(keccak256(utf8(uri))) ×2 + đăng ký URI (listing có chữ ký seller)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "E7",
+      "name": "Evidence hash on-chain == keccak256(utf8(uri))",
+      "status": "PASS",
+      "detail": "seller=0x4561d4313a5f7b27d506e5d1a051b0b038553ba9ee0c7cb1f4c6a40e09f4692d buyer=0x2e742221a4c95c9b2eec0490c2909141b65ac7ab3d7469d66ecdc206dcc0962d"
+    },
+    {
+      "id": "E8",
+      "name": "Agent attest flagged=false (from = Agent)",
+      "status": "PASS",
+      "detail": "state=Attested flagged=False risk=20 reportHash_match=True"
+    },
+    {
+      "id": "E9",
+      "name": "Hết dispute window, không có khiếu nại",
+      "status": "PASS",
+      "detail": "deadline=1795154997 (Fuji: chờ thời gian thật) disputes=0"
+    },
+    {
+      "id": "E10",
+      "name": "resolveClean",
+      "status": "PASS",
+      "detail": "event ResolvedClean(tradeId=6) PayoutDeferred=0"
+    },
+    {
+      "id": "E11",
+      "name": "Cọc hoàn đúng cho Seller & Buyer, CDU burn, state Resolved",
+      "status": "PASS",
+      "detail": "refund seller=0.003 buyer=0.003 (expected 0.003 each) CDU=(0, 0) reputation=(51, 51)"
+    },
+    {
+      "id": "E12",
+      "name": "Listing reconcile → SOLD",
+      "status": "PASS",
+      "detail": "listing.status=SOLD"
+    }
+  ],
+  "txs": [
+    {
+      "label": "createTrade",
+      "from_role": "seller",
+      "hash": "0x797a1cdf676fc7d9265c685f326fa97fd2b8fa20d34bf759d2b43ff84e6557fa",
+      "block": 61366384,
+      "status": 1,
+      "gas_used": 252292,
+      "fee_wei": "40366720",
+      "value_wei": "0",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0x797a1cdf676fc7d9265c685f326fa97fd2b8fa20d34bf759d2b43ff84e6557fa"
+    },
+    {
+      "label": "deposit (seller)",
+      "from_role": "seller",
+      "hash": "0x3f46e7fddd823cd2a28f1b9156ba95355d814494694cf0f2882aa4879fcad3c3",
+      "block": 61366385,
+      "status": 1,
+      "gas_used": 94450,
+      "fee_wei": "15112000",
+      "value_wei": "3000000000000000",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0x3f46e7fddd823cd2a28f1b9156ba95355d814494694cf0f2882aa4879fcad3c3"
+    },
+    {
+      "label": "deposit (buyer)",
+      "from_role": "buyer",
+      "hash": "0x5bd0311abecafa285f641b6ba51e94098888cc90bc55efb0876d224e760885d5",
+      "block": 61366387,
+      "status": 1,
+      "gas_used": 101413,
+      "fee_wei": "16226080",
+      "value_wei": "3000000000000000",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0x5bd0311abecafa285f641b6ba51e94098888cc90bc55efb0876d224e760885d5"
+    },
+    {
+      "label": "submitEvidence (seller)",
+      "from_role": "seller",
+      "hash": "0xd82bdec4b3afb828a18df9024fcdfdb3cce561ed3ff54873d723b700deb48520",
+      "block": 61366390,
+      "status": 1,
+      "gas_used": 50775,
+      "fee_wei": "8124000",
+      "value_wei": "0",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0xd82bdec4b3afb828a18df9024fcdfdb3cce561ed3ff54873d723b700deb48520"
+    },
+    {
+      "label": "submitEvidence (buyer)",
+      "from_role": "buyer",
+      "hash": "0x02ecfeec3d884f79d2052d8474dbb97dca501b532b65f67c45fa891fa2b294fd",
+      "block": 61366391,
+      "status": 1,
+      "gas_used": 52899,
+      "fee_wei": "8463840",
+      "value_wei": "0",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0x02ecfeec3d884f79d2052d8474dbb97dca501b532b65f67c45fa891fa2b294fd"
+    },
+    {
+      "label": "attest (Agent)",
+      "from_role": "agent",
+      "hash": "0x7eb61255837eb0697724d685f11441904a4ce06b37b915ecc7c556923450eedd",
+      "block": 61366405,
+      "status": 1,
+      "gas_used": 58959,
+      "fee_wei": "9433440",
+      "value_wei": "0",
+      "from": "0x579eD8b6a4A0dAc0E3ACB0C96392ADE857327081",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0x7eb61255837eb0697724d685f11441904a4ce06b37b915ecc7c556923450eedd"
+    },
+    {
+      "label": "resolveClean (seller)",
+      "from_role": "seller",
+      "hash": "0xda5d71a0c2d467992c729d93f12321624ceb71851e7ef4819b46a7dd4625b931",
+      "block": 61366455,
+      "status": 1,
+      "gas_used": 98841,
+      "fee_wei": "15814560",
+      "value_wei": "0",
+      "snowtrace": "https://testnet.snowtrace.io/tx/0xda5d71a0c2d467992c729d93f12321624ceb71851e7ef4819b46a7dd4625b931"
+    }
+  ],
+  "finished_utc": "2026-11-20T06:10:20Z"
+}
