@@ -30,7 +30,7 @@ curl http://127.0.0.1:8000/health     # JSON, "chain_id": 43113
 
 Mở **http://127.0.0.1:3000**. Không cần file `.env`: `SESSION_SECRET` và `ATTEST_API_KEY` được tự sinh (ngẫu nhiên, quyền `0600`) trong Docker volume `runtime_secrets`. Mặc định kết nối hợp đồng Fuji của nhóm (§6).
 
-> `compose.yaml` là chế độ chạy local chính thức. Các file `compose.shared.yaml` / `compose.ops.yaml` là **chế độ nâng cao** dành cho máy chủ vận hành tập trung — nhóm **không** vận hành máy chủ công khai, bạn không cần dùng chúng.
+> `compose.yaml` là cấu hình Docker duy nhất của dự án: Frontend + Backend chạy trên máy bạn, kết nối hợp đồng thật trên Avalanche Fuji. Nhóm không vận hành máy chủ công khai.
 
 ## 3. Hai ví Seller & Buyer trên cùng một máy
 

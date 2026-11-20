@@ -19,7 +19,6 @@ contracts/script/
 **/__pycache__/
 .pytest_cache/
 docs/
-.devcontainer/
 README.md
 RUN_LOCAL_BEGINNER.md
 *.tsbuildinfo

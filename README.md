@@ -2,7 +2,7 @@
 Collectibles marketplace with on-chain 30% AVAX deposit-only escrow on Avalanche C-Chain (Fuji `43113` / Anvil `31337`) and AI evidence attestation.
 Tech stack: Next.js 15 App Router (BFF HMAC + Local Wallet + Wagmi) · FastAPI + SQLite WAL (Python 3.12) · OpenCV, Tesseract OCR, pHash · Solidity (Foundry 1.5.1, OpenZeppelin v5.1) · Avalanche Fuji.
 
-> **Người mới chạy thử trên máy cá nhân hoặc GitHub Codespaces?** Xem hướng dẫn chi tiết từng bước (Windows / Ubuntu & Debian / Linux khác / macOS / GitHub Codespaces, chỉ cần Git + Docker): [**RUN_LOCAL_BEGINNER.md**](RUN_LOCAL_BEGINNER.md)
+> **Người mới chạy thử trên máy cá nhân?** Xem hướng dẫn chi tiết từng bước (Windows / Ubuntu & Debian / Linux khác / macOS, chỉ cần Git + Docker): [**RUN_LOCAL_BEGINNER.md**](RUN_LOCAL_BEGINNER.md)
 
 ---
 
@@ -54,10 +54,6 @@ Mở `http://127.0.0.1:3000`. Frontend + Backend chạy local, mọi giao dịch
 | **Mode B** (tuỳ chọn) | Bạn tự deploy bằng `contracts/script/Deploy.s.sol` | Toàn bộ, gồm Agent `attest` và Owner `resolveDispute` bằng ví testnet của chính bạn | Script đã kiểm thử trên Anvil; deploy Fuji theo Mode B chưa được nhóm kiểm thử end-to-end |
 
 Dừng: `docker compose stop` / `docker compose down` (giữ volume dữ liệu). **Không** dùng `docker compose down -v` nếu muốn giữ `marketplace.db`.
-
-### Nâng cao (tuỳ chọn): Shared Client / Ops Server
-
-`compose.shared.yaml` (client không giữ secret, gọi một Ops Backend từ xa qua `SHARED_API_URL`) và `compose.ops.yaml` (+ [`.env.ops.example`](.env.ops.example), [`docker/Caddyfile.ops.example`](docker/Caddyfile.ops.example)) phục vụ mô hình một máy chủ vận hành tập trung (`backend` API không giữ khóa + `agent-worker` cô lập giữ `AGENT_PRIVATE_KEY`). **Nhóm không vận hành Ops Server công khai** cho bài nộp này; nếu chạy `compose.shared.yaml` mà không có `SHARED_API_URL`, UI hiển thị hướng dẫn thay vì kết nối backend.
 
 ### Dev: chạy thủ công từng dịch vụ với Anvil local (chỉ cho phát triển & test tự động — không phải bằng chứng Avalanche)
 
