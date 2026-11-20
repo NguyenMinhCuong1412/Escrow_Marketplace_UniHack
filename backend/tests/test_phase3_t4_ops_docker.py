@@ -4,9 +4,9 @@ test_phase3_t4_ops_docker.py
 Tests for P3-T4 (Shared Docker / Zero-Config Client & Ops Separation):
 - TC-T4-BE-01: OPS_AUTH_ALLOWED_ORIGINS is strictly decoupled from CORS_ORIGINS
 - TC-T4-BE-02: docker/init_secrets.py generates independent >= 32-char secrets with split mode & restricted perms
-- TC-T4-BE-03: compose.shared.yaml & compose.ops.yaml maintain strict secret/key/DB boundaries
-- TC-P4C1-01..05 (Phase 4 / Proposal P4-C1): Hosted UI Shared Auth + secret isolation, loopback port binding,
-  Caddyfile template limits (64MB body, >= 150s timeouts, X-Forwarded-* overwrite)
+- Docker entrypoints use LF line endings and keep secret guards
+(FINAL-MINIMAL-003: 4 tests for compose.shared.yaml / compose.ops.yaml / Caddyfile.ops.example were removed
+ together with those files; see docs/test-evidence/FINAL-MINIMAL-003-QA-REPORT.md)
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
@@ -197,106 +196,6 @@ class TestPhase3T4OpsDocker:
         if os.name != "nt":
             assert stat.S_IMODE(backend_env.stat().st_mode) == 0o600
             assert stat.S_IMODE(frontend_env.stat().st_mode) == 0o600
-
-    def test_compose_shared_and_ops_security_boundaries(self):
-        shared = yaml.safe_load((REPO_ROOT / "compose.shared.yaml").read_text(encoding="utf-8"))
-        ops = yaml.safe_load((REPO_ROOT / "compose.ops.yaml").read_text(encoding="utf-8"))
-
-        # Shared Client must contain ONLY frontend and zero Ops secrets or SQLite DB
-        assert list(shared["services"].keys()) == ["frontend"]
-        fe = shared["services"]["frontend"]
-        fe_env = fe["environment"]
-        assert fe["build"]["args"]["NEXT_PUBLIC_BACKEND_URL"] == "/_backend"
-        assert fe_env["NEXT_PUBLIC_BACKEND_URL"] == "/_backend"
-        assert fe_env["BFF_AUTH_MODE"] == "shared"
-        for forbidden in ("PINATA_JWT", "AGENT_PRIVATE_KEY", "ATTEST_API_KEY", "OPS_JWT_SECRET", "BACKEND_URL"):
-            assert forbidden not in fe_env
-        assert list(shared["volumes"].keys()) == ["client_runtime_secrets"]
-
-        # Ops Server: backend has shared auth + Pinata relay + NO AGENT_PRIVATE_KEY; worker holds AGENT_PRIVATE_KEY
-        ops_be = ops["services"]["backend"]
-        ops_be_env = ops_be["environment"]
-        assert ops_be_env["ENABLE_SHARED_AUTH"] == "true"
-        assert ops_be_env["AGENT_AUTO"] == "false"
-        assert "AGENT_PRIVATE_KEY" not in ops_be_env
-        assert ops_be_env["ALLOW_LOCAL_HOSTS"] == "${ALLOW_LOCAL_HOSTS:-false}"
-        assert ops_be_env["ENFORCE_EVIDENCE_HASH"] == "${ENFORCE_EVIDENCE_HASH:-true}"
-
-        ops_worker = ops["services"]["agent-worker"]
-        assert "AGENT_PRIVATE_KEY" in ops_worker["environment"]
-
-        ops_fe = ops["services"]["frontend"]
-        assert "hosted-ui" in ops_fe.get("profiles", [])
-        assert "OPS_JWT_SECRET" not in ops_fe["environment"]
-        assert not any(v.startswith("ops_backend_secrets:") for v in ops_fe["volumes"])
-
-    def test_p4_c1_hosted_ui_uses_shared_auth_without_ops_secrets(self):
-        """TC-P4C1-01/02: Hosted UI chạy Shared Auth nội bộ, không giữ Ops secret, SESSION_SECRET riêng bền vững."""
-        ops = yaml.safe_load((REPO_ROOT / "compose.ops.yaml").read_text(encoding="utf-8"))
-        ops_fe = ops["services"]["frontend"]
-        env = ops_fe["environment"]
-
-        assert env["BFF_AUTH_MODE"] == "shared"
-        assert env["SHARED_API_URL"] == "http://backend:8000"
-        assert env["CLIENT_SECRETS_FILE"] == "/run/client-secrets/session.env"
-        assert env["NEXT_PUBLIC_BACKEND_URL"] == "/_backend"
-        assert env["TRADE_INDEX_ENABLED"] == "${TRADE_INDEX_ENABLED:-true}"
-        for forbidden in (
-            "ATTEST_API_KEY",
-            "OPS_JWT_SECRET",
-            "PINATA_JWT",
-            "AGENT_PRIVATE_KEY",
-            "WORKER_AGENT_PRIVATE_KEY",
-            "BACKEND_URL",
-            "REQUIRE_PROXY_SIGNATURE",
-            "SESSION_SECRET",
-        ):
-            assert forbidden not in env, f"Hosted UI must not receive {forbidden}"
-
-        assert ops_fe["volumes"] == ["ops_hosted_ui_secrets:/run/client-secrets"]
-        assert "ops_hosted_ui_secrets" in ops["volumes"]
-        # Hosted UI không còn phụ thuộc volume secrets do init-ops-secrets sinh ra
-        assert "init-ops-secrets" not in ops_fe.get("depends_on", {})
-
-        # init-ops-secrets giữ nguyên split mode (backward-compatible cho rollback), không mount volume Hosted UI
-        init = ops["services"]["init-ops-secrets"]
-        assert init["environment"]["OPS_SPLIT_SECRETS"] == "true"
-        assert init["environment"]["FRONTEND_SECRETS_FILE"] == "/run/frontend-secrets/secrets.env"
-        for svc_name in ("init-ops-secrets", "backend", "agent-worker"):
-            vols = ops["services"][svc_name].get("volumes", [])
-            assert not any(v.startswith("ops_hosted_ui_secrets:") for v in vols)
-
-    def test_p4_c1_ops_ports_bind_loopback_by_default(self):
-        """TC-P4C1-03: backend 8000 & Hosted UI 3000 chỉ publish trên 127.0.0.1 (chống Docker iptables bypass ufw)."""
-        ops = yaml.safe_load((REPO_ROOT / "compose.ops.yaml").read_text(encoding="utf-8"))
-        assert ops["services"]["backend"]["ports"] == ["${OPS_BIND_IP:-127.0.0.1}:${OPS_API_PORT:-8000}:8000"]
-        assert ops["services"]["frontend"]["ports"] == [
-            "${OPS_UI_BIND_IP:-127.0.0.1}:${OPS_UI_PORT:-3000}:3000"
-        ]
-        for svc_name in ("init-ops-secrets", "agent-worker"):
-            assert "ports" not in ops["services"][svc_name]
-
-    def test_p4_c1_caddyfile_template_enforces_proxy_limits(self):
-        """TC-P4C1-05: Caddyfile mẫu ép 64MB body, timeout >= 150s và ghi đè X-Forwarded-* từ kết nối TCP thực."""
-        caddy = (REPO_ROOT / "docker/Caddyfile.ops.example").read_text(encoding="utf-8")
-        assert b"\r\n" not in (REPO_ROOT / "docker/Caddyfile.ops.example").read_bytes()
-
-        def _site_block(host: str) -> str:
-            m = re.search(r"(?ms)^" + re.escape(host) + r" \{\n(.*?)^\}", caddy)
-            assert m, f"missing site block {host}"
-            return m.group(1)
-
-        for host, upstream in (("api.{$OPS_DOMAIN}", "127.0.0.1:8000"), ("app.{$OPS_DOMAIN}", "127.0.0.1:3000")):
-            block = _site_block(host)
-            assert f"reverse_proxy {upstream}" in block
-            assert re.search(r"max_size\s+64MB", block)
-            assert "header_up X-Forwarded-For {remote_host}" in block
-            assert "header_up X-Forwarded-Proto {scheme}" in block
-            assert "header_up X-Forwarded-Host {host}" in block
-            assert "trusted_proxies" not in block
-            for directive in ("read_timeout", "write_timeout"):
-                m = re.search(directive + r"\s+(\d+)s", block)
-                assert m and int(m.group(1)) >= 150, f"{host}: {directive} must be >= 150s"
 
     def test_shell_entrypoints_have_lf_line_endings_and_proper_secret_guards(self):
         for rel in ("docker/backend-entrypoint.sh", "docker/frontend-entrypoint.sh"):

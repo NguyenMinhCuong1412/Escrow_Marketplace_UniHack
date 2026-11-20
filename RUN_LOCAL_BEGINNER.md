@@ -1,6 +1,6 @@
 # Hướng Dẫn Cài Đặt & Chạy Escrow Marketplace Trên Nhiều Nền Tảng
 
-Hướng dẫn từng bước để clone, cấu hình và chạy toàn bộ **Escrow Marketplace** (Frontend Next.js + Backend FastAPI + AI Pipeline OpenCV/Tesseract + SQLite WAL) **chỉ bằng Git và Docker Compose** (hoặc trực tiếp trên trình duyệt qua **GitHub Codespaces**), **không cần cài thủ công Node.js, Python, Foundry, OpenCV hay Tesseract**.
+Hướng dẫn từng bước để clone, cấu hình và chạy toàn bộ **Escrow Marketplace** (Frontend Next.js + Backend FastAPI + AI Pipeline OpenCV/Tesseract + SQLite WAL) **chỉ bằng Git và Docker Compose** trên máy cá nhân, **không cần cài thủ công Node.js, Python, Foundry, OpenCV hay Tesseract**.
 
 > **An toàn thử nghiệm (`Avalanche Fuji Testnet — Chain ID: 43113`):** Hệ thống kết nối mạng thử nghiệm Fuji (`Escrow`: `0x19D053c84941411888f5b9e40c854365fdd4eb00`). Tuyệt đối không dùng ví thật, seed phrase thật hoặc AVAX mainnet.
 
@@ -12,11 +12,10 @@ Hướng dẫn từng bước để clone, cấu hình và chạy toàn bộ **E
 2. [Nền tảng 2: Ubuntu / Debian (Terminal + Docker Engine / Compose)](#2-ubuntu--debian-terminal--docker-engine--compose)
 3. [Nền tảng 3: Các Linux distro khác (Fedora / RHEL / Arch / openSUSE)](#3-các-linux-distro-khác-theo-hệ-quản-lý-gói)
 4. [Nền tảng 4: macOS (Intel `x86_64` và Apple Silicon `M1–M4`)](#4-macos-intel-và-apple-silicon)
-5. [Nền tảng 5: GitHub Codespaces (Chạy trực tiếp trên trình duyệt)](#5-github-codespaces-chạy-trực-tiếp-trên-trình-duyệt)
-6. [Cấu hình tùy chọn (Chế độ Không cần khóa vs IPFS Pinata / AI Auto-Agent)](#6-cấu-hình-lần-đầu-tùy-chọn-theo-nhu-cầu)
-7. [Kiểm tra nhanh, mở website & kết nối ví Fuji](#7-kiểm-tra-website--kết-nối-ví-avalanche-fuji-43113)
-8. [Dừng, khởi động lại, xem logs & cập nhật](#8-dừng-khởi-động-lại-xem-logs--cập-nhật)
-9. [Xử lý các lỗi thường gặp](#9-xử-lý-các-lỗi-thường-gặp)
+5. [Cấu hình tùy chọn (Chế độ Không cần khóa vs IPFS Pinata / AI Auto-Agent)](#5-cấu-hình-lần-đầu-tùy-chọn-theo-nhu-cầu)
+6. [Kiểm tra nhanh, mở website & kết nối ví Fuji](#6-kiểm-tra-website--kết-nối-ví-avalanche-fuji-43113)
+7. [Dừng, khởi động lại, xem logs & cập nhật](#7-dừng-khởi-động-lại-xem-logs--cập-nhật)
+8. [Xử lý các lỗi thường gặp](#8-xử-lý-các-lỗi-thường-gặp)
 
 ---
 
@@ -65,7 +64,7 @@ docker info
 git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
 Set-Location Escrow_Marketplace_UniHack
 
-# 3. (Tùy chọn) Tạo file .env nếu muốn dùng Pinata hoặc AI Auto-Agent — xem Mục 6
+# 3. (Tùy chọn) Tạo file .env nếu muốn dùng Pinata hoặc AI Auto-Agent — xem Mục 5
 # Copy-Item .env.example .env
 
 # 4. Build và khởi chạy toàn bộ hệ thống (lần đầu mất ~2-5 phút)
@@ -78,7 +77,7 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 *(Nếu dùng terminal bên trong một distro WSL2 Ubuntu trên Windows: bật **Settings → Resources → WSL Integration** trong Docker Desktop cho distro đó, rồi dùng các lệnh Bash tương tự Mục 2.)*
 
-Mở trình duyệt tại **`http://127.0.0.1:3000`** (hoặc `http://localhost:3000`), rồi xem tiếp [Mục 7](#7-kiểm-tra-website--kết-nối-ví-avalanche-fuji-43113) và [Mục 8](#8-dừng-khởi-động-lại-xem-logs--cập-nhật).
+Mở trình duyệt tại **`http://127.0.0.1:3000`** (hoặc `http://localhost:3000`), rồi xem tiếp [Mục 6](#6-kiểm-tra-website--kết-nối-ví-avalanche-fuji-43113) và [Mục 7](#7-dừng-khởi-động-lại-xem-logs--cập-nhật).
 
 ---
 
@@ -148,7 +147,7 @@ docker info
 git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
 cd Escrow_Marketplace_UniHack
 
-# 3. (Tùy chọn) Tạo .env nếu cần Pinata / Auto-Agent — xem Mục 6
+# 3. (Tùy chọn) Tạo .env nếu cần Pinata / Auto-Agent — xem Mục 5
 # cp .env.example .env
 
 # 4. Build và khởi chạy
@@ -213,7 +212,7 @@ docker info
 git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
 cd Escrow_Marketplace_UniHack
 
-# (Tùy chọn) Xem Mục 6 nếu cần điền PINATA_JWT / AGENT_PRIVATE_KEY
+# (Tùy chọn) Xem Mục 5 nếu cần điền PINATA_JWT / AGENT_PRIVATE_KEY
 # cp .env.example .env
 
 docker compose up --build -d
@@ -259,7 +258,7 @@ docker info
 git clone https://github.com/NguyenMinhCuong1412/Escrow_Marketplace_UniHack.git
 cd Escrow_Marketplace_UniHack
 
-# 3. (Tùy chọn) Tạo file .env nếu muốn dùng Pinata hoặc AI Auto-Agent — xem Mục 6
+# 3. (Tùy chọn) Tạo file .env nếu muốn dùng Pinata hoặc AI Auto-Agent — xem Mục 5
 # cp .env.example .env
 
 # 4. Build và khởi chạy
@@ -274,63 +273,7 @@ Trên macOS, khuyên mở **`http://localhost:3000`** (hoặc dùng Chrome / Edg
 
 ---
 
-## 5. GitHub Codespaces (Chạy trực tiếp trên trình duyệt)
-
-GitHub Codespaces cho phép mở và chạy toàn bộ dự án **ngay trên trình duyệt**, không cần cài Git hay Docker lên máy cá nhân. Repo đã tích hợp sẵn [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json) và [`.devcontainer/compose.codespaces.yml`](.devcontainer/compose.codespaces.yml).
-
-### 5.1. Tạo Codespace
-1. Mở repository trên GitHub → bấm nút **`<> Code`** → chuyển sang tab **Codespaces** → chọn **Create codespace on main** *(khuyên chọn máy từ **4 cores / 8 GB RAM** nếu có, để build image OpenCV + Next.js nhanh hơn)*.
-2. Chờ khoảng 30–60 giây để Codespace khởi tạo môi trường Ubuntu kèm **Docker-in-Docker** và **Docker Compose v2**.
-
-### 5.2. (Tùy chọn) Cấu hình Pinata / Agent an toàn bằng GitHub Codespaces Secrets
-**Tuyệt đối không commit file `.env` hay key lên repository.**
-- Nếu chỉ xem giao diện Marketplace, kết nối ví, xác thực phiên và kiểm tra giao dịch on-chain: **không cần cấu hình Secrets nào** (`SESSION_SECRET` và `ATTEST_API_KEY` được hệ thống tự sinh ngẫu nhiên an toàn trong Docker volume `runtime_secrets`).
-- Nếu cần bật upload IPFS (`PINATA_JWT`) hoặc AI Auto-Agent ký `attest()` (`AGENT_PRIVATE_KEY` + `AGENT_AUTO`):
-  1. Vào **GitHub Account Settings → Codespaces → Secrets** *(khuyên dùng — chỉ gắn cho tài khoản của bạn)* hoặc **Repository Settings → Secrets and variables → Codespaces**, tạo các secret cần dùng (`PINATA_JWT`, `AGENT_PRIVATE_KEY`, `AGENT_AUTO=true`, tùy chọn `IPFS_GATEWAY`).
-  2. Gán quyền truy cập repository `Escrow_Marketplace_UniHack` cho secret đó.
-  3. Nếu thêm secret *sau khi* Codespace đang chạy, hãy bấm thông báo **Reload / Restart Codespace** để biến môi trường nạp vào shell của Codespace trước khi chạy `docker compose up -d`.
-
-> **Lưu ý về biến `NEXT_PUBLIC_*` build-time:**
-> Các biến có tiền tố `NEXT_PUBLIC_*` (`NEXT_PUBLIC_CHAIN_ID`, `NEXT_PUBLIC_ESCROW_ADDRESS`, `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_IPFS_GATEWAY`, `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) được Next.js đóng gói trực tiếp vào mã JavaScript phía trình duyệt lúc **`next build` (`docker compose build`)**.
-> - Nếu bạn thay đổi bất kỳ biến `NEXT_PUBLIC_*` nào, bắt buộc chạy lại **`docker compose up --build -d`**.
-> - Nếu chỉ thêm secret phía server (`PINATA_JWT`, `AGENT_PRIVATE_KEY`, `AGENT_AUTO`), chỉ cần chạy `docker compose up -d`.
-
-### 5.3. Kiểm tra môi trường & Khởi động trong Terminal của Codespaces
-Trong Terminal của Codespaces (mặc định đang ở `/workspaces/Escrow_Marketplace_UniHack`), chạy:
-
-```bash
-# 1. Kiểm tra Docker-in-Docker, Compose & biến Codespaces
-git --version
-docker --version
-docker compose version
-docker info
-echo "CODESPACE_NAME=${CODESPACE_NAME:-local}"
-
-# 2. Khởi chạy toàn bộ dự án bằng lệnh chuẩn (tự ghép override .devcontainer/compose.codespaces.yml)
-docker compose up --build -d
-
-# 3. Kiểm tra container healthy & Backend health nội bộ
-docker compose ps
-curl -s http://127.0.0.1:8000/health
-```
-
-### 5.4. Mở website, bảo mật Ports Private & cơ chế hoạt động trên Codespaces
-1. Mở tab **Ports** (cạnh Terminal trong VS Code web) → kiểm tra 2 cổng `3000` và `8000`:
-   - **Cả port `3000` và `8000` mặc định phải giữ ở chế độ `Private`** (đã khai báo trong [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json)). **Không** chuyển port `8000` sang `Public`.
-2. Tại dòng port **`3000`** (`Escrow Marketplace (Web UI)`), bấm biểu tượng quả địa cầu (**Open in Browser**) để mở URL HTTPS dạng `https://<CODESPACE_NAME>-3000.app.github.dev` trong **một tab trình duyệt riêng**.
-3. **Cách các lớp bảo mật & BFF hoạt động trên forwarded URL Codespaces:**
-   - **Cookie xác thực (`escrow_auth_session`):** URL Codespaces dùng `HTTPS`, nên cookie `HttpOnly; Secure; SameSite=Lax` hoạt động ổn định trên mọi trình duyệt kể cả Safari.
-   - **BFF & CSRF (`ALLOWED_ORIGINS`):** Toàn bộ route `/api/*` gọi nội bộ tới `http://backend:8000` trong mạng Docker riêng. Entrypoint [`docker/frontend-entrypoint.sh`](docker/frontend-entrypoint.sh) và [`docker/backend-entrypoint.sh`](docker/backend-entrypoint.sh) tự động nối origin `https://<CODESPACE_NAME>-3000.app.github.dev` vào `ALLOWED_ORIGINS` (cho Next.js BFF chống CSRF) và `CORS_ORIGINS` (cho FastAPI), đồng thời vẫn chặn cross-site / origin lạ (`403 CSRF_REJECTED`).
-   - **Giữ port `8000` Private cho các request phía client (`/_backend`):** Do `NEXT_PUBLIC_BACKEND_URL` được đóng gói lúc build, [`.devcontainer/compose.codespaces.yml`](.devcontainer/compose.codespaces.yml) cấu hình `NEXT_PUBLIC_BACKEND_URL=/_backend` kết hợp danh sách 5 đường dẫn đọc công khai hợp lệ trong [`frontend/next.config.js`](frontend/next.config.js) (`/health`, `/report/<id>`, `/agent/status/<id>`, `/trade/<id>/uris`, `/trade/<id>/nonce-qr.png`). Nhờ đó, trang `/trade/3/report` hay `/trade/4` gọi **cùng origin HTTPS port `3000`** thay vì gọi chéo sang port `8000` — tránh lỗi Mixed Content, tránh bị proxy GitHub chặn port `8000` Private và không phụ thuộc `CODESPACE_NAME` khi build.
-4. **Cách kết nối ví trên Codespaces:**
-   - **Ví trình duyệt (Core Wallet / MetaMask):** Bắt buộc dùng tab trình duyệt ngoài (**Open in Browser**); extension ví **không** tiêm vào khung *Simple Browser* nhúng trong VS Code web.
-   - **Local Wallet (`/auth/local`):** Hoạt động trực tiếp trên `https://<CODESPACE_NAME>-3000.app.github.dev` (có HTTPS để WebCrypto hoạt động).
-   - **WalletConnect:** Tự động gắn metadata origin hiện tại (`window.location.origin`), cho phép quét QR bằng ví di động.
-   - **Phương án thay thế bằng VS Code Desktop:** Chọn *Open in VS Code Desktop* trên GitHub Codespaces (hoặc `gh codespace ports forward 3000:3000 8000:8000`) để tunnel an toàn về `http://127.0.0.1:3000` trên máy cá nhân mà vẫn giữ mọi port Private.
-
----
-
-## 6. Cấu hình lần đầu (Tùy chọn theo nhu cầu)
+## 5. Cấu hình lần đầu (Tùy chọn theo nhu cầu)
 
 ### Chế độ 1 — Dùng ngay không cần tạo `.env` (Khuyên dùng cho người mới xem demo)
 Khi chạy `docker compose up --build -d` trực tiếp:
@@ -355,7 +298,7 @@ Trên máy local, tạo `.env` từ [`.env.example`](.env.example):
   nano .env
   ```
 
-Các biến tùy chọn trong `.env` (hoặc Codespaces Secrets):
+Các biến tùy chọn trong `.env`:
 - `PINATA_JWT=...` *(token từ https://app.pinata.cloud/ có quyền `pinFileToIPFS` để upload ảnh niêm yết & bằng chứng)*.
 - `AGENT_PRIVATE_KEY=...` và `AGENT_AUTO=true` *(chỉ dùng cho ví AI Agent khớp `Escrow.agent()` trên Fuji và có AVAX testnet làm gas)*.
 - *(Tùy chọn)* `IPFS_GATEWAY=https://<ten-gateway>.mypinata.cloud/ipfs/` để tránh giới hạn tốc độ (`HTTP 429`) của gateway công khai.
@@ -364,12 +307,12 @@ Các biến tùy chọn trong `.env` (hoặc Codespaces Secrets):
 
 ---
 
-## 7. Kiểm tra website & Kết nối ví Avalanche Fuji (`43113`)
+## 6. Kiểm tra website & Kết nối ví Avalanche Fuji (`43113`)
 
 Sau khi `docker compose ps` báo cả `backend` và `frontend` đều **`healthy` / `running`**:
 
-- **Website:** `http://127.0.0.1:3000` (hoặc `http://localhost:3000` trên local/macOS; `https://<CODESPACE_NAME>-3000.app.github.dev` trên Codespaces)
-- **API Backend Health:** `http://127.0.0.1:8000/health` *(hoặc `<frontend-url>/_backend/health` trong Codespaces)*
+- **Website:** `http://127.0.0.1:3000` (hoặc `http://localhost:3000`)
+- **API Backend Health:** `http://127.0.0.1:8000/health`
 
 *(Lưu ý: Nếu chưa điền `AGENT_PRIVATE_KEY`, `/health` trả `"ok": true`, `"chain_id": 43113`, `"tesseract": true`, `"insecure_for_chain": false` và `"agent_signer_configured": false` — máy bạn chỉ đọc chain, không ký `attest()`. Đây là hành vi bình thường ở Chế độ 1; xem [docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md](docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md) §6.)*
 
@@ -392,9 +335,9 @@ Các trang chính:
 
 ---
 
-## 8. Dừng, khởi động lại, xem logs & cập nhật
+## 7. Dừng, khởi động lại, xem logs & cập nhật
 
-Chạy trong thư mục gốc `Escrow_Marketplace_UniHack` (dùng chung cho Windows PowerShell, Linux, macOS và GitHub Codespaces):
+Chạy trong thư mục gốc `Escrow_Marketplace_UniHack` (dùng chung cho Windows PowerShell, Linux và macOS):
 
 ```bash
 # Xem log thời gian thực (tất cả dịch vụ / riêng từng dịch vụ)
@@ -405,7 +348,7 @@ docker compose logs -f frontend
 # Tạm dừng mà giữ nguyên database SQLite & secret
 docker compose stop
 
-# Khởi động lại (hoặc áp dụng thay đổi mới trong .env / Codespaces Secrets runtime)
+# Khởi động lại (hoặc áp dụng thay đổi mới trong .env)
 docker compose up -d
 
 # Tắt hẳn container (vẫn giữ dữ liệu volume backend_data & runtime_secrets)
@@ -421,7 +364,7 @@ docker compose down -v
 
 ---
 
-## 9. Xử lý các lỗi thường gặp
+## 8. Xử lý các lỗi thường gặp
 
 | Triệu chứng / Thông báo lỗi | Nền tảng | Nguyên nhân | Cách khắc phục |
 |---|---|---|---|
@@ -432,10 +375,7 @@ docker compose down -v
 | `unknown shorthand flag: 'd' in -d` với `docker-compose` | Linux distro | Dùng nhầm binary `docker-compose` v1 cũ thay vì plugin v2 | Luôn gõ `docker compose ...` (có dấu cách, không gạch nối) và kiểm tra `docker compose version` |
 | `Bind for 0.0.0.0:3000 failed: port is already allocated` (hoặc cổng `8000`) | Mọi nền tảng | Đã có dịch vụ khác chiếm cổng `3000` hoặc `8000` | Dừng ứng dụng đang chiếm cổng cũ rồi chạy lại `docker compose up -d` |
 | Không tạo được tin đăng / báo `401` trên HTTP `127.0.0.1` | Safari (macOS) | Safari có thể từ chối cookie `Secure` trên HTTP `127.0.0.1` | Mở **`http://localhost:3000`** hoặc dùng **Chrome / Edge / Firefox / Brave** |
-| Extension Core/MetaMask không hiện trong Codespaces | GitHub Codespaces | Đang mở giao diện trong khung *Simple Browser* nhúng của VS Code | Vào tab **Ports** → cổng `3000` → bấm **Open in Browser** để mở bằng tab trình duyệt độc lập |
-| Thêm Codespaces Secrets nhưng app chưa nhận | GitHub Codespaces | Secrets được nạp khi Codespace khởi tạo/khởi động lại, hoặc biến `NEXT_PUBLIC_*` cần rebuild | Restart Codespace để nạp env mới, chạy `docker compose up -d` (thêm `--build` nếu sửa `NEXT_PUBLIC_*`) |
-| Codespace ngắt kết nối / báo cổng `3000` không phản hồi sau khi ngủ | GitHub Codespaces | Codespaces tự dừng container sau thời gian không hoạt động | Mở lại Codespaces → chạy `docker compose up -d` |
-| Upload ảnh báo `503` / `Thiếu PINATA_JWT` | Mọi nền tảng | Chưa cấu hình `PINATA_JWT` (hệ thống fail-closed trên Fuji `43113`) | Điền `PINATA_JWT=...` trong `.env` (local) hoặc Codespaces Secrets → chạy `docker compose up -d` |
-| QR Nonce / trang chi tiết trade / `/health` báo thiếu `AGENT_PRIVATE_KEY` | Mọi nền tảng | Mặc định tắt ví Agent vì lý do bảo mật | Nếu muốn test Auto-Agent `attest()` và QR Nonce, điền `AGENT_PRIVATE_KEY` + `AGENT_AUTO=true` rồi chạy `docker compose up -d` |
+| Upload ảnh báo `503` / `Thiếu PINATA_JWT` | Mọi nền tảng | Chưa cấu hình `PINATA_JWT` (hệ thống fail-closed trên Fuji `43113`) | Điền `PINATA_JWT=...` trong `.env` → chạy `docker compose up -d` |
+| Verify AI / `attest()` báo thiếu `AGENT_PRIVATE_KEY` (`503`) | Mọi nền tảng | Máy bạn không giữ khóa ví Agent của hợp đồng (mặc định, fail-closed) | Bình thường với hợp đồng Fuji của nhóm (xem [docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md](docs/local-demo/LOCAL-DEMO-SETUP-GUIDE.md) §6). QR nonce vẫn hoạt động vì chỉ đọc on-chain |
 | Tải ảnh IPFS chậm hoặc lỗi `HTTP 429` | Mọi nền tảng | Gateway công cộng bị giới hạn tần suất | Điền gateway riêng vào `IPFS_GATEWAY=https://<ten-gateway>.mypinata.cloud/ipfs/` → chạy `docker compose up -d` |
 | Giao dịch ví báo sai mạng | Mọi nền tảng | Ví đang chọn Mainnet (`43114` / `1`) | Chuyển ví sang **Avalanche Fuji Testnet (`Chain ID: 43113`)** |
